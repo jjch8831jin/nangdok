@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>낭독</title>
+<meta name="theme-color" content="#2a5bbf">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root{--bg:#ffffff;--fg:#1d1d1f;--mut:#6e6e73;--card:#f5f5f7;--hl:#fff1a8;--accent:#d93025;--bd:#d2d2d7;--btn:#e8e8ed}
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#1c1c1e;--fg:#f2f2f7;--mut:#a1a1a6;--card:#2c2c2e;--hl:#665300;--accent:#ff6b5e;--bd:#48484a;--btn:#3a3a3c}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:12px;display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg);color:var(--fg);font:14pt/1.6 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif}
+  h1{font-size:14pt;margin:0 0 8px}
+  .panel{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:10px}
+  #script-input{display:block;width:100%;flex:1;min-height:0;font-family:inherit;font-size:14pt;line-height:1.9;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-top:none;border-radius:0;padding:14px 18px;resize:none;outline:none}
+  button{font-family:inherit;font-size:14pt;color:#fff;background:#6e6e73;border:none;border-radius:8px;padding:4px 14px;cursor:pointer;font-weight:600}
+  button:hover{filter:brightness(0.95)}
+  .b-file{background:#7b4fc9}
+  .b-edit{background:#2e9e5b}
+  .b-mic{background:#2a5bbf}
+  .b-mic.on{background:#d93025}
+  .b-full{background:#0e8a96}
+  .b-full.on{background:#d93025}
+  .b-size{background:#d97a0b}
+  #size-label,#bar label,#counter{padding:2px 12px;border-radius:999px;font-weight:600}
+  #size-label{background:#fff1a8;color:#5a4a00}
+  #bar label{background:#f0e3ff;color:#5b2a9e}
+  #bar label input{accent-color:#7b4fc9}
+  #bar label.l-adv{background:#d8f3e4;color:#14633b}
+  #bar label.l-adv input{accent-color:#2e9e5b}
+  #counter{background:#dbe8ff;color:#1c3f8f}
+  @media (prefers-color-scheme: dark){
+    #size-label{background:#665300;color:#fff1a8}
+    #bar label{background:#4a3170;color:#e8d5ff}
+    #bar label.l-adv{background:#1f5a3b;color:#d3f5e2}
+    #counter{background:#1f3b66;color:#cfe0ff}
+  }
+  #reader{display:flex;flex-direction:column;flex:1;min-height:0;background:var(--bg)}
+  #bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px;background:var(--card);border:1px solid var(--bd);border-radius:10px 10px 0 0}
+  #bar .sp{flex:1}
+  #bar label{display:flex;align-items:center;gap:6px}
+  #bar input[type=range]{width:120px}
+  #text{overflow-y:auto;flex:1;min-height:0;padding:14px 18px;border:1px solid var(--bd);border-top:none;font-size:14pt;line-height:1.9;scroll-behavior:auto}
+  .s{padding:4px 8px;margin:2px 0;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all}
+  .s.cur{background:var(--hl)}
+  #status{padding:6px 10px;border:1px solid var(--bd);border-top:none;border-radius:0 0 10px 10px;color:var(--mut);background:var(--card);min-height:2em}
+  #reader:fullscreen{height:100vh;padding:0}
+  #reader:fullscreen #text, #reader:fullscreen #script-input{flex:1;height:auto}
+  #reader:fullscreen #bar{border-radius:0}
+  #reader:fullscreen #status{border-radius:0}
+</style>
+</head>
+<body>
+
+<h1>🎤 낭독</h1>
+
+<div id="reader">
+  <div id="bar">
+    <button id="btn-file" class="b-file" title="txt, 워드(docx), 한글(hwp, hwpx), PDF 파일을 대본 창으로 불러옵니다">📂 파일 불러오기</button>
+    <input type="file" id="file-input" accept=".txt,.md,.docx,.pdf,.hwp,.hwpx,text/plain" hidden>
+    <button id="btn-edit" class="b-edit" title="대본을 붙여넣거나 고칠 때 누르세요">✔ 완료</button>
+    <button id="btn-mic" class="b-mic" title="마이크로 읽는 소리를 듣고 따라갑니다">🎤 시작</button>
+    <button id="btn-full" class="b-full">⛶ 전체화면</button>
+    <button id="btn-smaller" class="b-size">A−</button>
+    <button id="btn-bigger" class="b-size">A+</button>
+    <span id="size-label">14pt</span>
+    <label>겹침 기준 <input type="range" id="th" min="30" max="90" step="5" value="50"><span id="th-label">50%</span></label>
+    <label class="l-adv" title="현재 문장을 이만큼 읽었다고 인식되면 다음 문장으로 넘어갑니다">넘김 시점 <input type="range" id="adv" min="50" max="90" step="5" value="70"><span id="adv-label">70%</span></label>
+    <span class="sp"></span>
+    <span id="counter">0 / 0</span>
+  </div>
+  <textarea id="script-input" placeholder="여기에 대본을 붙여넣고 ✔ 완료를 누르세요. 줄바꿈과 마침표(. ? !) 기준으로 문장을 나눕니다."></textarea>
+  <div id="text" style="display:none"></div>
+  <div id="status"></div>
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  var sentences = [];   // 원문 문장
+  var norms = [];       // 비교용(띄어쓰기·부호 제거) 문장
+  var sets = [];        // 문장별 2글자 묶음 집합
+  var els = [];         // 문장 DOM
+  var cur = 0;
+  var holdIdx = -1;     // 방금 넘어온 문장(말이 아직 끝나는 중이라 되돌아가지 않게 잠깐 막음)
+  var holdUntil = 0;
+  var baseLen = 0, lastNormLen = 0;   // 클릭 전에 인식된 글자는 비교에서 뺌
+  var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
+  var wantListen = false;
+  var rec = null;
+  var readerPt = 14;
+  var lastUserScroll = 0;
+  var editing = true;   // true: 대본 입력/수정, false: 읽기
+
+  var BEHIND = 2, AHEAD = 12, TAIL = 20;
+
+  function norm(s){ return s.replace(/[^\p{L}\p{N}]/gu, ''); }
+  function bigrams(s){ var a = []; for (var i = 0; i < s.length - 1; i++) a.push(s.slice(i, i + 2)); return a; }
+  function setStatus(m){ $('status').textContent = m; }
+  function threshold(){ return parseInt($('th').value, 10) / 100; }
+  function advancePoint(){ return parseInt($('adv').value, 10) / 100; }
+
+  /* ==FILEREAD-START== */
+  /* ---------- 파일 읽기 (txt, md, docx, hwpx, hwp, pdf) ---------- */
+  function u16(d, o){ return d[o] | (d[o + 1] << 8); }
+  function u32(d, o){ return (d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) | (d[o + 3] << 24)) >>> 0; }
+
+  async function inflateRaw(bytes){
+    var ds = new DecompressionStream('deflate-raw');
+    var stream = new Blob([bytes]).stream().pipeThrough(ds);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  // zip 안에서 원하는 파일만 꺼냄
+  async function unzipEntries(bytes, wanted){
+    var end = -1;
+    for (var i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--){
+      if (u32(bytes, i) === 0x06054b50){ end = i; break; }
+    }
+    if (end < 0) throw new Error('올바른 문서 파일이 아닙니다.');
+    var count = u16(bytes, end + 10), p = u32(bytes, end + 16), out = {};
+    for (var n = 0; n < count; n++){
+      if (u32(bytes, p) !== 0x02014b50) break;
+      var method = u16(bytes, p + 10), csize = u32(bytes, p + 20);
+      var nlen = u16(bytes, p + 28), elen = u16(bytes, p + 30), clen = u16(bytes, p + 32), lho = u32(bytes, p + 42);
+      var name = new TextDecoder('utf-8').decode(bytes.subarray(p + 46, p + 46 + nlen));
+      if (wanted(name)){
+        var start = lho + 30 + u16(bytes, lho + 26) + u16(bytes, lho + 28);
+        var raw = bytes.subarray(start, start + csize);
+        if (method === 0) out[name] = raw;
+        else if (method === 8) out[name] = await inflateRaw(raw);
+      }
+      p += 46 + nlen + elen + clen;
+    }
+    return out;
+  }
+
+  function xmlDecode(s){
+    return s.replace(/&#x([0-9a-fA-F]+);/g, function(m, x){ return String.fromCodePoint(parseInt(x, 16)); })
+            .replace(/&#(\d+);/g, function(m, x){ return String.fromCodePoint(parseInt(x, 10)); })
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  }
+
+  function docxText(xml){
+    var out = [];
+    xml.split('</w:p>').forEach(function(para){
+      var line = '', m, re = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:tab\s*\/>|<w:br\s*\/>/g;
+      while ((m = re.exec(para))){
+        if (m[1] !== undefined) line += xmlDecode(m[1]);
+        else line += (m[0].indexOf('tab') > 0 ? '\t' : '\n');
+      }
+      out.push(line);
+    });
+    return out.join('\n');
+  }
+
+  function hwpxText(xml){
+    var out = [];
+    xml.split('</hp:p>').forEach(function(para){
+      var line = '', m, re = /<hp:t(?:\s[^>]*)?>([\s\S]*?)<\/hp:t>/g;
+      while ((m = re.exec(para))) line += xmlDecode(m[1].replace(/<[^>]*>/g, ''));
+      out.push(line);
+    });
+    return out.join('\n');
+  }
+
+  // 한글(.hwp)은 복합 문서(CFB) 형식 — 안의 스트림을 꺼내 읽음
+  function cfbParse(d){
+    var sig = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    for (var i = 0; i < 8; i++) if (d[i] !== sig[i]) throw new Error('올바른 한글(.hwp) 파일이 아닙니다.');
+    var ss = 1 << u16(d, 0x1E), mss = 1 << u16(d, 0x20);
+    var firstDir = u32(d, 0x30), cutoff = u32(d, 0x38), firstMini = u32(d, 0x3C), difatStart = u32(d, 0x44), difatCount = u32(d, 0x48);
+    function sec(id){ var o = (id + 1) * ss; return d.subarray(o, o + ss); }
+    var fatIds = [], v;
+    for (i = 0; i < 109; i++){ v = u32(d, 0x4C + i * 4); if (v < 0xFFFFFFFA) fatIds.push(v); }
+    var dsid = difatStart;
+    for (var k = 0; k < difatCount && dsid < 0xFFFFFFFA; k++){
+      var s = sec(dsid);
+      for (var j = 0; j < ss / 4 - 1; j++){ v = u32(s, j * 4); if (v < 0xFFFFFFFA) fatIds.push(v); }
+      dsid = u32(s, ss - 4);
+    }
+    var fat = [];
+    fatIds.forEach(function(id){ var s2 = sec(id); for (var j2 = 0; j2 < ss / 4; j2++) fat.push(u32(s2, j2 * 4)); });
+    function chain(start){
+      var ids = [], guard = 0;
+      while (start < 0xFFFFFFFA && guard++ <= fat.length){ ids.push(start); start = fat[start]; }
+      return ids;
+    }
+    function readChain(start, size){
+      var ids = chain(start), out = new Uint8Array(ids.length * ss);
+      ids.forEach(function(id, n){ out.set(sec(id), n * ss); });
+      return size == null ? out : out.subarray(0, size);
+    }
+    var dir = readChain(firstDir), entries = [];
+    for (var e = 0; e + 128 <= dir.length; e += 128){
+      var nl = u16(dir, e + 64), name = '';
+      for (var c = 0; c < nl / 2 - 1; c++) name += String.fromCharCode(u16(dir, e + c * 2));
+      entries.push({ name: name, type: dir[e + 66], left: u32(dir, e + 68), right: u32(dir, e + 72), child: u32(dir, e + 76), start: u32(dir, e + 116), size: u32(dir, e + 120) });
+    }
+    if (!entries.length) throw new Error('올바른 한글(.hwp) 파일이 아닙니다.');
+    var miniStream = null, miniFat = null;
+    function readStream(en){
+      if (en.size < cutoff){
+        if (!miniStream){
+          miniStream = readChain(entries[0].start, entries[0].size);
+          var mf = readChain(firstMini); miniFat = [];
+          for (var q = 0; q + 4 <= mf.length; q += 4) miniFat.push(u32(mf, q));
+        }
+        var ids = [], s3 = en.start, guard = 0;
+        while (s3 < 0xFFFFFFFA && guard++ <= miniFat.length){ ids.push(s3); s3 = miniFat[s3]; }
+        var out = new Uint8Array(ids.length * mss);
+        ids.forEach(function(id, n){ out.set(miniStream.subarray(id * mss, id * mss + mss), n * mss); });
+        return out.subarray(0, en.size);
+      }
+      return readChain(en.start, en.size);
+    }
+    var paths = {};
+    function walk(id, prefix){
+      if (id >= entries.length) return;
+      var en = entries[id];
+      if (en.seen) return;
+      en.seen = true;
+      walk(en.left, prefix);
+      paths[prefix + en.name] = en;
+      if (en.type === 1 || en.type === 5) walk(en.child, prefix + en.name + '/');
+      walk(en.right, prefix);
+    }
+    entries[0].seen = true;
+    walk(entries[0].child, '');
+    return { paths: paths, readStream: readStream };
+  }
+
+  function hwpSection(d){
+    var pos = 0, res = '';
+    while (pos + 4 <= d.length){
+      var hd = u32(d, pos); pos += 4;
+      var tag = hd & 0x3FF, size = hd >>> 20;
+      if (size === 0xFFF){ size = u32(d, pos); pos += 4; }
+      if (tag === 67){   // 문단 글자 기록
+        var end = Math.min(pos + size, d.length), i = pos;
+        while (i + 2 <= end){
+          var c = u16(d, i); i += 2;
+          if (c >= 32) res += String.fromCharCode(c);
+          else if (c === 13 || c === 10) res += '\n';
+          else if (c === 9){ res += '\t'; i += 14; }
+          else if (c === 30 || c === 31) res += ' ';
+          else if (c === 0 || (c >= 24 && c <= 29)) { /* 건너뜀 */ }
+          else i += 14;   // 표·그림 등 컨트롤은 16바이트 차지
+        }
+      }
+      pos += size;
+    }
+    return res;
+  }
+
+  async function hwpText(bytes){
+    var cfb = cfbParse(bytes);
+    var fh = cfb.paths['FileHeader'];
+    if (!fh) throw new Error('올바른 한글(.hwp) 파일이 아닙니다.');
+    var flags = u32(cfb.readStream(fh), 36);
+    if (flags & 2) throw new Error('암호가 걸린 한글 파일은 읽을 수 없습니다. 암호를 푼 뒤 다시 시도해 주세요.');
+    if (flags & 4) throw new Error('배포용 한글 문서는 읽을 수 없습니다. 복사해서 붙여넣어 주세요.');
+    var names = Object.keys(cfb.paths).filter(function(n){ return /^BodyText\/Section\d+$/.test(n); })
+      .sort(function(a, b){ return parseInt(a.slice(16), 10) - parseInt(b.slice(16), 10); });
+    if (!names.length) throw new Error('한글 문서에서 본문을 찾지 못했습니다.');
+    var parts = [];
+    for (var i = 0; i < names.length; i++){
+      var data = cfb.readStream(cfb.paths[names[i]]);
+      if (flags & 1) data = await inflateRaw(data);
+      parts.push(hwpSection(data));
+    }
+    return parts.join('\n');
+  }
+
+  // PDF는 줄 끝에서 끊겨 있으므로, 문장 부호로 끝나는 줄까지 이어 붙임
+  function mergePdfLines(s){
+    var out = [], cur = '';
+    s.split('\n').forEach(function(line){
+      line = line.trim();
+      if (!line){ if (cur){ out.push(cur); cur = ''; } return; }
+      cur += (cur ? ' ' : '') + line;
+      if (/[.!?。…”"')」』]$/.test(line)){ out.push(cur); cur = ''; }
+    });
+    if (cur) out.push(cur);
+    return out.join('\n');
+  }
+
+  var pdfReady = null;
+  function loadPdfJs(){
+    if (window.pdfjsLib) return Promise.resolve();
+    if (!pdfReady) pdfReady = new Promise(function(res, rej){
+      var s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      s.onload = function(){
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        res();
+      };
+      s.onerror = function(){ pdfReady = null; rej(new Error('PDF 읽기 도구를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.')); };
+      document.head.appendChild(s);
+    });
+    return pdfReady;
+  }
+
+  async function pdfText(bytes){
+    await loadPdfJs();
+    var pdf = await window.pdfjsLib.getDocument({ data: bytes }).promise;
+    var s = '';
+    for (var p = 1; p <= pdf.numPages; p++){
+      var page = await pdf.getPage(p), tc = await page.getTextContent(), lastY = null;
+      tc.items.forEach(function(it){
+        if (typeof it.str !== 'string') return;
+        var y = it.transform ? it.transform[5] : null;
+        if (lastY !== null && y !== null && Math.abs(y - lastY) > 2 && s.slice(-1) !== '\n') s += '\n';
+        s += it.str;
+        if (it.hasEOL) s += '\n';
+        if (y !== null && it.str.trim() !== '') lastY = y;
+      });
+      s += '\n';
+    }
+    if (!s.trim()) throw new Error('이 PDF에는 읽을 수 있는 글자가 없습니다(스캔한 그림 PDF일 수 있습니다).');
+    return mergePdfLines(s);
+  }
+
+  function decodeText(bytes){
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch (err) { return new TextDecoder('euc-kr').decode(bytes); }   // 옛 메모장(ANSI) 파일
+  }
+
+  async function readFileText(f){
+    var name = f.name.toLowerCase();
+    var bytes = new Uint8Array(await f.arrayBuffer()), text, z, keys;
+    var byNum = function(a, b){ return parseInt(a.replace(/\D/g, ''), 10) - parseInt(b.replace(/\D/g, ''), 10); };
+    if (/\.docx$/.test(name)){
+      z = await unzipEntries(bytes, function(n){ return n === 'word/document.xml'; });
+      if (!z['word/document.xml']) throw new Error('올바른 워드(.docx) 파일이 아닙니다.');
+      text = docxText(new TextDecoder('utf-8').decode(z['word/document.xml']));
+    } else if (/\.hwpx$/.test(name)){
+      z = await unzipEntries(bytes, function(n){ return /^Contents\/section\d+\.xml$/i.test(n); });
+      keys = Object.keys(z).sort(byNum);
+      if (!keys.length) throw new Error('올바른 한글(.hwpx) 파일이 아닙니다.');
+      text = keys.map(function(k){ return hwpxText(new TextDecoder('utf-8').decode(z[k])); }).join('\n');
+    } else if (/\.hwp$/.test(name)){
+      text = await hwpText(bytes);
+    } else if (/\.pdf$/.test(name)){
+      text = await pdfText(bytes);
+    } else if (/\.(doc|xls|xlsx|ppt|pptx)$/.test(name)){
+      throw new Error('이 형식은 읽을 수 없습니다. 워드는 .docx로 저장한 뒤 불러와 주세요.');
+    } else {
+      text = decodeText(bytes);
+    }
+    text = text.replace(/^\uFEFF/, '').replace(/\r/g, '').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n');
+    if (!text.trim()) throw new Error('읽어 온 글자가 없습니다.');
+    return text;
+  }
+  /* ==FILEREAD-END== */
+
+  /* ---------- 대본 불러오기 ---------- */
+  function splitScript(text){
+    var out = [];
+    text.split(/\r?\n/).forEach(function(line){
+      line = line.trim();
+      if (!line) return;
+      line.split(/(?<=[.!?。…])\s+/).forEach(function(p){
+        p = p.trim();
+        if (p && norm(p).length > 0) out.push(p);
+      });
+    });
+    return out;
+  }
+
+  function loadScript(){
+    var text = $('script-input').value;
+    sentences = splitScript(text);
+    norms = sentences.map(norm);
+    sets = norms.map(function(n){ return new Set(bigrams(n)); });
+    var box = $('text');
+    box.innerHTML = '';
+    els = sentences.map(function(s, i){
+      var d = document.createElement('div');
+      d.className = 's';
+      d.dataset.i = i;
+      d.textContent = s;
+      box.appendChild(d);
+      return d;
+    });
+    cur = 0; holdIdx = -1;
+    box.scrollTop = 0;
+    if (els.length) els[0].classList.add('cur');
+    updateCounter();
+    setStatus(sentences.length ? ('대본 ' + sentences.length + '문장을 불러왔습니다.') : '불러올 문장이 없습니다.');
+    return sentences.length > 0;
+  }
+
+  function setMode(edit){
+    editing = edit;
+    $('script-input').style.display = edit ? 'block' : 'none';
+    $('text').style.display = edit ? 'none' : 'block';
+    $('btn-edit').textContent = edit ? '✔ 완료' : '✏️ 편집';
+    if (edit) $('script-input').focus();
+    else scrollToCur();
+  }
+
+  function updateCounter(){ $('counter').textContent = (sentences.length ? cur + 1 : 0) + ' / ' + sentences.length; }
+
+  function setCur(i){
+    if (els[cur]) els[cur].classList.remove('cur');
+    cur = i;
+    holdIdx = -1;
+    if (els[cur]) els[cur].classList.add('cur');
+    updateCounter();
+  }
+
+  /* ---------- 스크롤 ---------- */
+  function userScrolling(){ return Date.now() - lastUserScroll < 1500; }
+
+  function scrollToCur(){
+    if (userScrolling() || !els[cur]) return;
+    var box = $('text');
+    var r = els[cur].getBoundingClientRect();
+    var b = box.getBoundingClientRect();
+    var target = box.scrollTop + (r.top - b.top) - box.clientHeight * 0.25;
+    box.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  }
+
+  ['wheel', 'touchmove', 'keydown'].forEach(function(ev){
+    $('text').addEventListener(ev, function(){ lastUserScroll = Date.now(); }, { passive: true });
+  });
+
+  /* ---------- 문장 비교 ---------- */
+  // 앞뒤 범위에서 못 찾는 상태가 이어질 때, 대본 전체에서 찾음 (확실할 때만)
+  function findGlobal(tb, total){
+    var need = Math.max(threshold() + 0.15, 0.65), best = -1, s1 = 0, s2 = 0;
+    for (var i = 0; i < sentences.length; i++){
+      var matched = 0;
+      for (var k = 0; k < tb.length; k++){ if (sets[i].has(tb[k])) matched += (k + 1); }
+      var score = matched / total;
+      if (score > s1){ s2 = s1; s1 = score; best = i; }
+      else if (score > s2){ s2 = score; }
+    }
+    if (best < 0 || s1 < need || s1 - s2 < 0.15 || (best === holdIdx && Date.now() < holdUntil)){ recIdx = -1; recCount = 0; return -1; }   // 비슷한 문장이 여럿이거나 방금 지나온 문장이면 옮기지 않음
+    if (best === recIdx) recCount++; else { recIdx = best; recCount = 1; }
+    if (recCount >= 2){ recIdx = -1; recCount = 0; missCount = 0; return best; }
+    return -1;
+  }
+
+  function handleSpeech(text){
+    if (!sentences.length) return;
+    var full = norm(text);
+    lastNormLen = full.length;
+    var n = full.slice(baseLen);
+    if (n.length < 4) return;
+    var tail = n.slice(-TAIL);
+    var tb = bigrams(tail);
+    if (!tb.length) return;
+    var total = 0;
+    tb.forEach(function(_, k){ total += (k + 1); });   // 최근에 말한 부분일수록 가중치↑
+
+    var th = threshold();
+    var best = -1, bestScore = 0;
+    var from = Math.max(0, cur - BEHIND), to = Math.min(sentences.length - 1, cur + AHEAD);
+    for (var i = from; i <= to; i++){
+      if (i === holdIdx && Date.now() < holdUntil) continue;
+      var matched = 0;
+      for (var k = 0; k < tb.length; k++){ if (sets[i].has(tb[k])) matched += (k + 1); }
+      var score = matched / total;
+      var need = th;
+      if (i > cur + 3) need += 0.15;    // 멀리 건너뛸수록 더 엄격하게
+      if (n.length < 8) need += 0.2;    // 말이 짧을수록 더 엄격하게
+      if (score < need) continue;
+      if (score > bestScore + 0.02 || (Math.abs(score - bestScore) <= 0.02 && best >= 0 && Math.abs(i - cur) < Math.abs(best - cur))){
+        best = i; bestScore = score;
+      }
+    }
+
+    var shown = full.length > 30 ? '…' + text.replace(/\s+/g, ' ').slice(-30) : text;
+    var note = '';
+    if (best < 0){
+      missCount++;
+      var jump = (missCount >= 4 && n.length >= 10) ? findGlobal(tb, total) : -1;
+      if (jump < 0){
+        setStatus('🎤 듣는 중: ' + shown + '  (대본과 맞지 않아 무시)');
+        return;
+      }
+      best = jump;
+      note = '  (' + (jump + 1) + '번째 문장으로 이동)';
+    } else {
+      missCount = 0; recIdx = -1; recCount = 0;
+    }
+    if (best !== cur){
+      setCur(best);
+      scrollToCur();
+    }
+
+    // 현재 문장을 얼마나 읽었는지 추정
+    var ns = norms[cur], pos = -1;
+    for (var k2 = tb.length - 1; k2 >= 0; k2--){
+      if (sets[cur].has(tb[k2])){ pos = ns.lastIndexOf(tb[k2]); break; }
+    }
+    var progress = pos >= 0 ? (pos + 2) / ns.length : 0;
+    if (progress >= advancePoint() && cur + 1 < sentences.length){
+      var prev = cur;
+      setCur(cur + 1);
+      holdIdx = prev;
+      holdUntil = Date.now() + 2500;
+      scrollToCur();
+    }
+    setStatus('🎤 듣는 중: ' + shown + note);
+  }
+
+  /* ---------- 음성 인식 ---------- */
+  function createRec(){
+    rec = new SR();
+    rec.lang = 'ko-KR';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onstart = function(){ baseLen = 0; lastNormLen = 0; setStatus('🎤 듣는 중: (말씀해 주세요)'); };
+
+    rec.onresult = function(e){
+      var t = '';
+      for (var i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+      handleSpeech(t);
+    };
+
+    rec.onerror = function(e){
+      if (e.error === 'no-speech' || e.error === 'aborted') return;   // onend에서 다시 시작
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+        stopMic('마이크가 차단되어 있습니다. 주소창 왼쪽 자물쇠 아이콘 → 마이크를 「허용」으로 바꾼 뒤 다시 시작해 주세요.');
+      } else if (e.error === 'audio-capture'){
+        stopMic('마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.');
+      } else if (e.error === 'network'){
+        stopMic('인터넷 연결 문제로 음성 인식이 중단되었습니다. 연결을 확인한 뒤 다시 시작해 주세요.');
+      } else {
+        stopMic('음성 인식 오류: ' + e.error);
+      }
+    };
+
+    rec.onend = function(){
+      if (!wantListen) return;
+      setTimeout(function(){
+        if (!wantListen) return;
+        try { rec.start(); } catch (err) { /* 이미 시작된 경우 무시 */ }
+      }, 300);
+    };
+  }
+
+  function startMic(){
+    if (!SR){ setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. PC 크롬이나 엣지에서 열어 주세요.'); return; }
+    if (editing){
+      if (!loadScript()){ setStatus('대본을 먼저 붙여넣어 주세요.'); return; }
+      setMode(false);
+    }
+    wantListen = true;
+    createRec();
+    try { rec.start(); } catch (err) { setStatus('시작 오류: ' + err.message); wantListen = false; return; }
+    $('btn-mic').classList.add('on');
+    $('btn-mic').textContent = '🎤 끄기';
+    if (navigator.permissions && navigator.permissions.query){
+      navigator.permissions.query({ name: 'microphone' }).then(function(r){
+        if (r.state === 'prompt') setStatus('마이크 허용 창이 뜨면 「허용」을 눌러 주세요(「이번에만 허용」은 매번 묻습니다).');
+      }).catch(function(){});
+    }
+  }
+
+  function stopMic(msg){
+    wantListen = false;
+    try { if (rec) rec.stop(); } catch (err) {}
+    $('btn-mic').classList.remove('on');
+    $('btn-mic').textContent = '🎤 시작';
+    setStatus(msg || '🎤 꺼짐');
+  }
+
+  /* ---------- 버튼 ---------- */
+  $('btn-edit').addEventListener('click', function(){
+    if (editing){
+      if (loadScript()) setMode(false);
+    } else {
+      if (wantListen) stopMic();
+      setMode(true);
+    }
+  });
+  $('btn-file').addEventListener('click', function(){ $('file-input').click(); });
+  $('file-input').addEventListener('change', function(e){
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    setStatus('「' + f.name + '」 읽는 중…');
+    readFileText(f).then(function(text){
+      if (wantListen) stopMic();
+      $('script-input').value = text;
+      setMode(true);
+      setStatus('「' + f.name + '」 파일을 불러왔습니다. 내용을 확인하고 ✔ 완료를 누르세요.');
+    }).catch(function(err){
+      setStatus('파일을 불러오지 못했습니다: ' + (err && err.message ? err.message : '알 수 없는 오류'));
+    });
+  });
+
+  $('btn-mic').addEventListener('click', function(){ wantListen ? stopMic() : startMic(); });
+
+  $('btn-full').addEventListener('click', function(){
+    if (document.fullscreenElement) document.exitFullscreen();
+    else $('reader').requestFullscreen().catch(function(){ setStatus('전체화면을 열 수 없습니다.'); });
+  });
+  document.addEventListener('fullscreenchange', function(){
+    $('btn-full').textContent = document.fullscreenElement ? '✖ 전체화면 닫기' : '⛶ 전체화면';
+    $('btn-full').classList.toggle('on', !!document.fullscreenElement);
+    setTimeout(scrollToCur, 100);
+  });
+
+  function applySize(){
+    $('text').style.fontSize = readerPt + 'pt';
+    $('script-input').style.fontSize = readerPt + 'pt';
+    $('size-label').textContent = readerPt + 'pt';
+  }
+  $('btn-bigger').addEventListener('click', function(){ readerPt = Math.min(60, readerPt + 2); applySize(); });
+  $('btn-smaller').addEventListener('click', function(){ readerPt = Math.max(14, readerPt - 2); applySize(); });
+
+  $('th').addEventListener('input', function(){ $('th-label').textContent = $('th').value + '%'; });
+  $('adv').addEventListener('input', function(){ $('adv-label').textContent = $('adv').value + '%'; });
+
+  // 전체화면에서 대본 창을 더블클릭해도 기본 창으로 돌아감
+  function dblExit(){
+    if (document.fullscreenElement){
+      if (window.getSelection) window.getSelection().removeAllRanges();
+      document.exitFullscreen();
+    }
+  }
+  $('text').addEventListener('dblclick', dblExit);
+  $('script-input').addEventListener('dblclick', dblExit);
+
+  // 문장을 클릭하면 그 문장을 시작 위치로
+  $('text').addEventListener('click', function(e){
+    var d = e.target.closest ? e.target.closest('.s') : null;
+    if (!d) return;
+    setCur(parseInt(d.dataset.i, 10));
+    baseLen = lastNormLen;          // 클릭 전에 하신 말은 비교에서 제외
+    missCount = 0; recIdx = -1; recCount = 0;
+    lastUserScroll = 0;
+    scrollToCur();
+    setStatus('시작 위치: ' + (cur + 1) + '번째 문장');
+  });
+
+  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0){
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  }
+
+  if (!SR) setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. PC 크롬이나 엣지에서 열어 주세요.');
+})();
+</script>
+</body>
+</html>
