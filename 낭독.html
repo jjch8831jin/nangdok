@@ -103,7 +103,8 @@
   var holdUntil = 0, holdFin = 0;
   var baseLen = 0, lastNormLen = 0;   // 클릭 전에 인식된 글자는 비교에서 뺌
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
-  var backIdx = -1, backCount = 0;                // 위쪽 문장으로 되돌아갈 때 연속 확인용
+  var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
+  var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
   var farIdx = -1, farCount = 0;                  // 먼 문장으로 옮길 때 연속 확인용
   var advCount = 0, lastAdvance = 0;              // 다음 문장으로 넘길 때 연속 확인용
   var df = {};                                    // 2글자 묶음이 대본의 몇 문장에 나오는지
@@ -500,7 +501,8 @@
 
   // 말한 글자(tail)가 문장에 '이어서, 순서대로' 들어 있는 만큼 점수를 냄
   // (짧게 떨어진 일치는 점수를 깎아서 '고목나무' 같은 반복 표현만으로는 점수가 같아지지 않게 함)
-  function scoreSentence(i, tail, W){
+  // excl이 있으면, 그 문장(지금 문장)에도 들어 있는 말은 빼고 '이 문장에만 있는 말'로 점수를 냄
+  function scoreSentence(i, tail, W, excl){
     var ns = norms[i], L = tail.length, k = 0, covered = 0;
     while (k < L - 1){
       var m = 2;
@@ -509,7 +511,8 @@
       if (r >= 1){
         var w = 0;
         for (var t = k; t < k + r; t++) w += W.wts[t];
-        covered += w * (r >= 3 ? 1 : (r === 2 ? 0.5 : 0));
+        var shared = (excl !== undefined && excl >= 0 && excl !== i && norms[excl].indexOf(tail.slice(k, k + r + 1)) >= 0);
+        if (!shared) covered += w * (r >= 3 ? 1 : (r === 2 ? 0.5 : 0));
         k += r;
       } else {
         k++;
@@ -566,6 +569,9 @@
   function handleSpeech(text){
     if (!sentences.length) return;
     var full = norm(text);
+    var nowT = Date.now();
+    if (lastEventTime && nowT - lastEventTime > 1200) baseLen = lastNormLen;   // 1.2초 넘게 쉬었다 읽으면, 그 전에 한 말은 비교에서 뺌
+    lastEventTime = nowT;
     lastNormLen = full.length;
     var n = full.slice(baseLen);
     if (n.length < 4) return;
@@ -599,12 +605,18 @@
       if (score < need) continue;
       if (isFar){
         if (n.length < 14) continue;
+        if (curScore >= th * 0.7 && score < curScore + 0.35) continue;   // 지금 문장을 읽는 중이면 먼 문장으로 안 옮김
         if (i === blockIdx && Date.now() < blockUntil) continue;
         if (score > farScore){ far = i; farScore = score; }
         continue;
       }
-      // 지금 문장이 충분히 맞으면, 다른 문장은 확실히 더 높을 때만 옮김
-      if (i !== cur && curScore >= th && score < curScore + (i < cur ? 0.20 : 0.10)) continue;
+      if (i !== cur){
+        // 같은 단어(예: '수기')가 여러 문장에 있어도, 지금 문장에 없고 이 문장에만 있는 말이 있어야 옮김
+        var uniq = scoreSentence(i, tail, W, cur);
+        if (uniq < 0.15) continue;
+        // 지금 문장을 읽고 있는 중이면 안 흔들리게: 다른 문장이 훨씬 확실할 때만
+        if (curScore >= th * 0.7 && (score < curScore + 0.35 || uniq < 0.30)) continue;
+      }
       if (score > nearScore + 0.02 || (Math.abs(score - nearScore) <= 0.02 && near >= 0 && Math.abs(i - cur) < Math.abs(near - cur))){
         near = i; nearScore = score;
       }
@@ -682,7 +694,7 @@
     rec.interimResults = true;
     rec.maxAlternatives = 1;
 
-    rec.onstart = function(){ baseLen = 0; lastNormLen = 0; setStatus('🎤 듣는 중: (말씀해 주세요)'); };
+    rec.onstart = function(){ baseLen = 0; lastNormLen = 0; lastEventTime = 0; setStatus('🎤 듣는 중: (말씀해 주세요)'); };
 
     rec.onresult = function(e){
       var t = '';
@@ -812,6 +824,14 @@
   if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0){
     navigator.serviceWorker.register('sw.js').catch(function(){});
   }
+
+  // 앱 창(주소창 없는 창)으로 열렸을 때 화면에서 쓸 수 있는 크기만큼 창을 키움 (일반 탭에서는 브라우저가 무시함)
+  try {
+    if (window.outerWidth < screen.availWidth - 20 || window.outerHeight < screen.availHeight - 20){
+      window.moveTo(screen.availLeft || 0, screen.availTop || 0);
+      window.resizeTo(screen.availWidth, screen.availHeight);
+    }
+  } catch (err) { /* 막혀 있으면 그대로 둠 */ }
 
   if (!SR) setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. PC 크롬이나 엣지에서 열어 주세요.');
 })();
