@@ -67,7 +67,7 @@
 </head>
 <body>
 
-<h1>🎤 낭독 <span class="ver" id="ver">v1006-3</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
+<h1>🎤 낭독 <span class="ver" id="ver">v1006-4</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
 
 <div id="reader">
   <div id="bar">
@@ -107,7 +107,7 @@
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
   var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
-  var APP_VERSION = 'v1006-3';
+  var APP_VERSION = 'v1006-4';
   var logRows = [], decision = '', lastCurScore = 0, lastLocked = false;   // 인식 기록(흔들림 분석용)
   var lastHeard = 0, wakeLock = null, silenceTimer = null, saveTimer = null, editStartText = '';
   var lockUntil = 0, advTimer = null;             // 지금 문장에 '올인'하는 시간 / 넘김 대기 타이머
@@ -886,6 +886,12 @@
       if (wantListen) stopMic();
       $('script-input').value = text;
       setMode(true);
+      // 불러온 글은 맨 위부터 보이게 (입력 칸에 커서가 맨 끝에 가서 아래로 내려가는 것을 막음)
+      var ta = $('script-input');
+      function toTop(){ try { ta.setSelectionRange(0, 0); } catch (err) {} ta.scrollTop = 0; }
+      toTop();
+      setTimeout(toTop, 0);
+      setTimeout(toTop, 120);
       lsSet('script', text);
       logNote('파일 불러옴: ' + f.name);
       setStatus('「' + f.name + '」 파일을 불러왔습니다. 내용을 확인하고 ✔ 완료를 누르세요.');
