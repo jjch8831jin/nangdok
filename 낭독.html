@@ -42,12 +42,14 @@
   }
   #reader{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;background:var(--bg)}
   #bar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:5px 6px;line-height:1.5;background:var(--card);border:1px solid var(--bd);border-radius:10px 10px 0 0}
-  #bar .sp{flex:1}
-  #bar label{display:flex;align-items:center;gap:4px}
+  #bar .sp{flex:0 0 0}
+  #counter{margin-left:auto}
+  #bar label{display:flex;align-items:center;gap:4px;flex:1 1 auto;max-width:420px}
+  #bar label > span:last-child{min-width:1.9em;text-align:right}
   #bar, #bar button, #bar label, #size-label, #counter{font-size:18pt}
   #bar button{padding:0 7px;white-space:nowrap}
   #bar button.b-size{padding:0 6px}
-  #bar input[type=range]{width:50px;margin:0}
+  #bar input[type=range]{flex:1 1 50px;width:50px;min-width:50px;margin:0}
   #text{overflow-y:auto;flex:1;min-height:0;padding:.8em max(8%, calc((100% - 36em) / 2));background:var(--read-bg);text-align:justify;border:1px solid var(--bd);border-top:none;font-size:14pt;line-height:2;scroll-behavior:auto}
   .s{padding:.2em 8px;margin:0 0 1em;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all;opacity:.5;transition:opacity .15s}
   .s:hover{opacity:.8}
