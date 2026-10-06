@@ -99,6 +99,7 @@
   var holdUntil = 0;
   var baseLen = 0, lastNormLen = 0;   // 클릭 전에 인식된 글자는 비교에서 뺌
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
+  var backIdx = -1, backCount = 0;                // 위쪽 문장으로 되돌아갈 때 연속 확인용
   var wantListen = false;
   var rec = null;
   var readerPt = 14;
@@ -373,10 +374,15 @@
     text.split(/\r?\n/).forEach(function(line){
       line = line.trim();
       if (!line) return;
-      line.split(/(?<=[.!?。…])\s+/).forEach(function(p){
-        p = p.trim();
-        if (p && norm(p).length > 0) out.push(p);
-      });
+      var parts = line.split(/(?<=[.!?。…])\s+/).map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+      for (var i = 0; i < parts.length; i++){
+        // 줄 맨 앞의 번호(1. ② 가. 등)는 뒤따르는 글과 한 문장으로 묶음
+        if (/^(?:\(?\d{1,3}[.)]|[①-⑳]|[가-하]\.|[A-Za-z]\.|[ⅰ-ⅹⅠ-Ⅹ]+\.)$/.test(parts[i]) && i + 1 < parts.length){
+          parts[i + 1] = parts[i] + ' ' + parts[i + 1];
+          continue;
+        }
+        if (norm(parts[i]).length > 0) out.push(parts[i]);
+      }
     });
     return out;
   }
@@ -450,17 +456,35 @@
   });
 
   /* ---------- 문장 비교 ---------- */
+  // 말한 글자(tail)가 문장에 '이어서, 순서대로' 들어 있는 만큼 점수를 냄
+  // (짧게 떨어진 일치는 점수를 깎아서 '고목나무' 같은 반복 표현만으로는 점수가 같아지지 않게 함)
+  function scoreSentence(i, tail, total){
+    var ns = norms[i], L = tail.length, k = 0, covered = 0;
+    while (k < L - 1){
+      var m = 2;
+      while (k + m <= L && ns.indexOf(tail.slice(k, k + m)) >= 0) m++;
+      var r = m - 2;                 // 이어서 맞은 2글자 묶음 개수
+      if (r >= 1){
+        var w = 0;
+        for (var t = k; t < k + r; t++) w += (t + 1);   // 최근에 말한 부분일수록 가중치↑
+        covered += w * (r >= 3 ? 1 : (r === 2 ? 0.5 : 0));
+        k += r;
+      } else {
+        k++;
+      }
+    }
+    return covered / total;
+  }
+
   // 앞뒤 범위에서 못 찾는 상태가 이어질 때, 대본 전체에서 찾음 (확실할 때만)
-  function findGlobal(tb, total){
+  function findGlobal(tail, total){
     var need = Math.max(threshold() + 0.15, 0.65), best = -1, s1 = 0, s2 = 0;
     for (var i = 0; i < sentences.length; i++){
-      var matched = 0;
-      for (var k = 0; k < tb.length; k++){ if (sets[i].has(tb[k])) matched += (k + 1); }
-      var score = matched / total;
+      var score = scoreSentence(i, tail, total);
       if (score > s1){ s2 = s1; s1 = score; best = i; }
       else if (score > s2){ s2 = score; }
     }
-    if (best < 0 || s1 < need || s1 - s2 < 0.15 || (best === holdIdx && Date.now() < holdUntil)){ recIdx = -1; recCount = 0; return -1; }   // 비슷한 문장이 여럿이거나 방금 지나온 문장이면 옮기지 않음
+    if (best < 0 || s1 < need || s1 - s2 < 0.15 || (best <= holdIdx && Date.now() < holdUntil)){ recIdx = -1; recCount = 0; return -1; }   // 비슷한 문장이 여럿이거나 방금 지나온 곳이면 옮기지 않음
     if (best === recIdx) recCount++; else { recIdx = best; recCount = 1; }
     if (recCount >= 2){ recIdx = -1; recCount = 0; missCount = 0; return best; }
     return -1;
@@ -481,15 +505,18 @@
     var th = threshold();
     var best = -1, bestScore = 0;
     var from = Math.max(0, cur - BEHIND), to = Math.min(sentences.length - 1, cur + AHEAD);
+    var curScore = scoreSentence(cur, tail, total);
+    var holdOn = Date.now() < holdUntil;
     for (var i = from; i <= to; i++){
-      if (i === holdIdx && Date.now() < holdUntil) continue;
-      var matched = 0;
-      for (var k = 0; k < tb.length; k++){ if (sets[i].has(tb[k])) matched += (k + 1); }
-      var score = matched / total;
+      if (holdOn && i <= holdIdx) continue;    // 방금 넘어온 문장과 그 위쪽은 잠시 제외
+      var score = (i === cur) ? curScore : scoreSentence(i, tail, total);
       var need = th;
       if (i > cur + 3) need += 0.15;    // 멀리 건너뛸수록 더 엄격하게
+      if (i < cur) need += 0.10;        // 위로 올라가는 것도 더 엄격하게
       if (n.length < 8) need += 0.2;    // 말이 짧을수록 더 엄격하게
       if (score < need) continue;
+      // 지금 문장이 충분히 맞으면, 다른 문장은 확실히 더 높을 때만 옮김
+      if (i !== cur && curScore >= th && score < curScore + (i < cur ? 0.20 : 0.10)) continue;
       if (score > bestScore + 0.02 || (Math.abs(score - bestScore) <= 0.02 && best >= 0 && Math.abs(i - cur) < Math.abs(best - cur))){
         best = i; bestScore = score;
       }
@@ -499,7 +526,7 @@
     var note = '';
     if (best < 0){
       missCount++;
-      var jump = (missCount >= 4 && n.length >= 10) ? findGlobal(tb, total) : -1;
+      var jump = (missCount >= 4 && n.length >= 10) ? findGlobal(tail, total) : -1;
       if (jump < 0){
         setStatus('🎤 듣는 중: ' + shown + '  (대본과 맞지 않아 무시)');
         return;
@@ -509,6 +536,12 @@
     } else {
       missCount = 0; recIdx = -1; recCount = 0;
     }
+    // 위쪽 문장으로 되돌아가는 것은 같은 문장이 연속 2번 나올 때만
+    if (best >= 0 && best < cur && note === ''){
+      if (best === backIdx) backCount++; else { backIdx = best; backCount = 1; }
+      if (backCount < 2){ setStatus('🎤 듣는 중: ' + shown); return; }
+    }
+    backIdx = -1; backCount = 0;
     if (best !== cur){
       setCur(best);
       scrollToCur();
