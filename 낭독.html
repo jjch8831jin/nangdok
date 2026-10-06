@@ -67,7 +67,7 @@
 </head>
 <body>
 
-<h1>🎤 낭독 <span class="ver" id="ver">v1006-2</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
+<h1>🎤 낭독 <span class="ver" id="ver">v1006-3</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
 
 <div id="reader">
   <div id="bar">
@@ -107,7 +107,7 @@
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
   var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
-  var APP_VERSION = 'v1006-2';
+  var APP_VERSION = 'v1006-3';
   var logRows = [], decision = '', lastCurScore = 0, lastLocked = false;   // 인식 기록(흔들림 분석용)
   var lastHeard = 0, wakeLock = null, silenceTimer = null, saveTimer = null, editStartText = '';
   var lockUntil = 0, advTimer = null;             // 지금 문장에 '올인'하는 시간 / 넘김 대기 타이머
@@ -604,22 +604,27 @@
     setStatus('↩ ' + (cur + 1) + '번째 문장으로 되돌렸습니다.');
   });
 
-  function doAdvance(){
+  function doAdvance(finished, consumeLen){
     if (cur + 1 >= sentences.length) return;
     var prev = cur;
     setCur(cur + 1);
-    holdIdx = prev;
-    holdUntil = Date.now() + 12000;
-    holdFin = 0;
+    if (finished){
+      // 다 읽은 문장은 인식 기록에서 지움: 남아 있는 앞 문장 끝말이 다른 문장과 겹쳐 보이는 일을 막음
+      baseLen = Math.max(baseLen, consumeLen || 0);
+    } else {
+      holdIdx = prev;
+      holdUntil = Date.now() + 12000;
+      holdFin = 0;
+    }
     lastAdvance = Date.now();
-    logNote('넘김 ' + (prev + 1) + '→' + (cur + 1));
+    logNote('넘김 ' + (prev + 1) + '→' + (cur + 1) + (finished ? '' : ' (일찍)'));
     scrollToCur();
   }
-  function scheduleAdvance(idx, ms){
+  function scheduleAdvance(idx, ms, finished, len){
     if (advTimer) return;
     advTimer = setTimeout(function(){
       advTimer = null;
-      if (cur === idx) doAdvance();
+      if (cur === idx) doAdvance(finished, len);
     }, ms);
   }
 
@@ -644,7 +649,7 @@
     if (!W) return;
 
     var th = threshold();
-    var from = Math.max(0, cur - BEHIND), to = Math.min(sentences.length - 1, cur + AHEAD);
+    var from = cur, to = Math.min(sentences.length - 1, cur + AHEAD);   // 앞으로만 따라감
     var curScore = scoreSentence(cur, tail, W);
     // 지금 문장이 맞고 있으면 5초 동안 '올인': 다음 문장으로 넘어가는 것 외에는 다른 문장으로 옮기지 않음
     if (curScore >= th * 0.7) lockUntil = Math.max(lockUntil, nowT + 5000);
@@ -653,10 +658,10 @@
     // 방금 넘어온 앞 문장은 '다 읽을 때까지' 되돌아가지 않게 막음 (새 문장을 읽기 시작하면 바로 풀림)
     var holdOn = Date.now() < holdUntil;
     if (holdOn){
-      if (curScore >= th) holdOn = false;
-      else {
-        if (!holdFin && readProgress(tail, holdIdx) >= 0.95) holdFin = Date.now();
-        if (holdFin && Date.now() - holdFin > 1500) holdOn = false;
+      if (curScore >= th) holdOn = false;                          // 새 문장을 읽기 시작함
+      else if (readProgress(tail, holdIdx) >= 0.95){               // 앞 문장을 다 읽음 → 그 기록은 비교에서 뺌
+        baseLen = lastNormLen; holdUntil = 0; decision = '앞 문장을 다 읽음';
+        return;
       }
       if (!holdOn) holdUntil = 0;
     }
@@ -744,8 +749,8 @@
     if (progress >= advancePoint() && cur + 1 < sentences.length && curScore - otherMax >= 0.10){
       advCount++;
       if ((advCount >= 2 || progress >= 0.97) && Date.now() - lastAdvance > 800){
-        var delay = advanceDelay();
-        if (delay > 0) scheduleAdvance(cur, delay); else doAdvance();
+        var delay = advanceDelay(), fin = progress >= 0.95;
+        if (delay > 0) scheduleAdvance(cur, delay, fin, lastNormLen); else doAdvance(fin, lastNormLen);
       }
     } else {
       advCount = 0;
