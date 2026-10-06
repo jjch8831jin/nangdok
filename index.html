@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>낭독</title>
+<meta name="theme-color" content="#2a5bbf">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root{--bg:#ffffff;--fg:#1d1d1f;--mut:#6e6e73;--card:#f5f5f7;--hl:#fff1a8;--accent:#d93025;--bd:#d2d2d7;--btn:#e8e8ed}
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#1c1c1e;--fg:#f2f2f7;--mut:#a1a1a6;--card:#2c2c2e;--hl:#665300;--accent:#ff6b5e;--bd:#48484a;--btn:#3a3a3c}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:12px;background:var(--bg);color:var(--fg);font:14pt/1.6 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif}
+  h1{font-size:14pt;margin:0 0 8px}
+  .panel{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:10px}
+  #script-input{display:block;width:100%;height:60vh;font-family:inherit;font-size:14pt;line-height:1.9;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-top:none;border-radius:0;padding:14px 18px;resize:none;outline:none}
+  button{font:14pt inherit;font-family:inherit;color:var(--fg);background:var(--btn);border:1px solid var(--bd);border-radius:8px;padding:4px 12px;cursor:pointer}
+  button:hover{filter:brightness(0.95)}
+  button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  #reader{display:flex;flex-direction:column;background:var(--bg)}
+  #bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px;background:var(--card);border:1px solid var(--bd);border-radius:10px 10px 0 0}
+  #bar .sp{flex:1}
+  #bar label{display:flex;align-items:center;gap:6px;color:var(--mut)}
+  #bar input[type=range]{width:120px}
+  #text{overflow-y:auto;height:60vh;padding:14px 18px;border:1px solid var(--bd);border-top:none;font-size:14pt;line-height:1.9;scroll-behavior:auto}
+  .s{padding:4px 8px;margin:2px 0;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all}
+  .s.cur{background:var(--hl)}
+  #status{padding:6px 10px;border:1px solid var(--bd);border-top:none;border-radius:0 0 10px 10px;color:var(--mut);background:var(--card);min-height:2em}
+  #reader:fullscreen{height:100vh;padding:0}
+  #reader:fullscreen #text, #reader:fullscreen #script-input{flex:1;height:auto}
+  #reader:fullscreen #bar{border-radius:0}
+  #reader:fullscreen #status{border-radius:0}
+</style>
+</head>
+<body>
+
+<h1>🎤 낭독</h1>
+
+<div id="reader">
+  <div id="bar">
+    <button id="btn-edit" title="대본을 붙여넣거나 고칠 때 누르세요">✔ 완료</button>
+    <button id="btn-mic" title="마이크로 읽는 소리를 듣고 따라갑니다">🎤 시작</button>
+    <button id="btn-full">⛶ 전체화면</button>
+    <button id="btn-smaller">A−</button>
+    <button id="btn-bigger">A+</button>
+    <span id="size-label">14pt</span>
+    <label>겹침 기준 <input type="range" id="th" min="30" max="90" step="5" value="50"><span id="th-label">50%</span></label>
+    <span class="sp"></span>
+    <span id="counter">0 / 0</span>
+  </div>
+  <textarea id="script-input" placeholder="여기에 대본을 붙여넣고 ✔ 완료를 누르세요. 줄바꿈과 마침표(. ? !) 기준으로 문장을 나눕니다."></textarea>
+  <div id="text" style="display:none"></div>
+  <div id="status">대본을 붙여넣고 ✔ 완료를 누른 뒤 🎤 시작을 누르세요. 문장을 클릭하면 그 문장부터 시작합니다.</div>
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  var sentences = [];   // 원문 문장
+  var norms = [];       // 비교용(띄어쓰기·부호 제거) 문장
+  var sets = [];        // 문장별 2글자 묶음 집합
+  var els = [];         // 문장 DOM
+  var cur = 0;
+  var preDone = false;  // 현재 문장에서 미리 스크롤을 이미 했는지
+  var wantListen = false;
+  var rec = null;
+  var readerPt = 14;
+  var lastUserScroll = 0;
+  var editing = true;   // true: 대본 입력/수정, false: 읽기
+
+  var BEHIND = 2, AHEAD = 12, TAIL = 20;
+
+  function norm(s){ return s.replace(/[^\p{L}\p{N}]/gu, ''); }
+  function bigrams(s){ var a = []; for (var i = 0; i < s.length - 1; i++) a.push(s.slice(i, i + 2)); return a; }
+  function setStatus(m){ $('status').textContent = m; }
+  function threshold(){ return parseInt($('th').value, 10) / 100; }
+
+  /* ---------- 대본 불러오기 ---------- */
+  function splitScript(text){
+    var out = [];
+    text.split(/\r?\n/).forEach(function(line){
+      line = line.trim();
+      if (!line) return;
+      line.split(/(?<=[.!?。…])\s+/).forEach(function(p){
+        p = p.trim();
+        if (p && norm(p).length > 0) out.push(p);
+      });
+    });
+    return out;
+  }
+
+  function loadScript(){
+    var text = $('script-input').value;
+    sentences = splitScript(text);
+    norms = sentences.map(norm);
+    sets = norms.map(function(n){ return new Set(bigrams(n)); });
+    var box = $('text');
+    box.innerHTML = '';
+    els = sentences.map(function(s, i){
+      var d = document.createElement('div');
+      d.className = 's';
+      d.dataset.i = i;
+      d.textContent = s;
+      box.appendChild(d);
+      return d;
+    });
+    cur = 0; preDone = false;
+    box.scrollTop = 0;
+    if (els.length) els[0].classList.add('cur');
+    updateCounter();
+    setStatus(sentences.length ? ('대본 ' + sentences.length + '문장을 불러왔습니다.') : '불러올 문장이 없습니다.');
+    return sentences.length > 0;
+  }
+
+  function setMode(edit){
+    editing = edit;
+    $('script-input').style.display = edit ? 'block' : 'none';
+    $('text').style.display = edit ? 'none' : 'block';
+    $('btn-edit').textContent = edit ? '✔ 완료' : '✏️ 편집';
+    if (edit) $('script-input').focus();
+    else scrollToCur();
+  }
+
+  function updateCounter(){ $('counter').textContent = (sentences.length ? cur + 1 : 0) + ' / ' + sentences.length; }
+
+  function setCur(i){
+    if (els[cur]) els[cur].classList.remove('cur');
+    cur = i;
+    if (els[cur]) els[cur].classList.add('cur');
+    preDone = false;
+    updateCounter();
+  }
+
+  /* ---------- 스크롤 ---------- */
+  function userScrolling(){ return Date.now() - lastUserScroll < 1500; }
+
+  function scrollToCur(){
+    if (userScrolling() || !els[cur]) return;
+    var box = $('text');
+    var r = els[cur].getBoundingClientRect();
+    var b = box.getBoundingClientRect();
+    var target = box.scrollTop + (r.top - b.top) - box.clientHeight * 0.25;
+    box.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  }
+
+  function preScrollNext(){
+    if (userScrolling()) return;
+    var next = els[cur + 1];
+    if (!next) return;
+    var box = $('text');
+    var b = box.getBoundingClientRect();
+    var r = next.getBoundingClientRect();
+    var c = els[cur].getBoundingClientRect();
+    var needBottom = Math.min(r.bottom, r.top + b.height * 0.25);
+    var overflow = needBottom - (b.bottom - b.height * 0.08);
+    if (overflow <= 0) return;
+    var maxShift = Math.max(0, c.top - b.top - 8);   // 현재 문장 윗부분이 잘리지 않게
+    var shift = Math.min(overflow, maxShift);
+    if (shift > 0) box.scrollBy({ top: shift, behavior: 'smooth' });
+  }
+
+  ['wheel', 'touchmove', 'keydown'].forEach(function(ev){
+    $('text').addEventListener(ev, function(){ lastUserScroll = Date.now(); }, { passive: true });
+  });
+
+  /* ---------- 문장 비교 ---------- */
+  function handleSpeech(text){
+    if (!sentences.length) return;
+    var n = norm(text);
+    if (n.length < 4) return;
+    var tail = n.slice(-TAIL);
+    var tb = bigrams(tail);
+    if (!tb.length) return;
+    var total = 0;
+    tb.forEach(function(_, k){ total += (k + 1); });   // 최근에 말한 부분일수록 가중치↑
+
+    var th = threshold();
+    var best = -1, bestScore = 0;
+    var from = Math.max(0, cur - BEHIND), to = Math.min(sentences.length - 1, cur + AHEAD);
+    for (var i = from; i <= to; i++){
+      var matched = 0;
+      for (var k = 0; k < tb.length; k++){ if (sets[i].has(tb[k])) matched += (k + 1); }
+      var score = matched / total;
+      var need = th;
+      if (i > cur + 3) need += 0.15;    // 멀리 건너뛸수록 더 엄격하게
+      if (n.length < 8) need += 0.2;    // 말이 짧을수록 더 엄격하게
+      if (score < need) continue;
+      if (score > bestScore + 0.02 || (Math.abs(score - bestScore) <= 0.02 && best >= 0 && Math.abs(i - cur) < Math.abs(best - cur))){
+        best = i; bestScore = score;
+      }
+    }
+
+    var shown = n.length > 30 ? '…' + text.replace(/\s+/g, ' ').slice(-30) : text;
+    if (best < 0){
+      setStatus('🎤 듣는 중: ' + shown + '  (대본과 맞지 않아 무시)');
+      return;
+    }
+    if (best !== cur){
+      setCur(best);
+      scrollToCur();
+    }
+
+    // 현재 문장을 얼마나 읽었는지 추정
+    var ns = norms[cur], pos = -1;
+    for (var k2 = tb.length - 1; k2 >= 0; k2--){
+      if (sets[cur].has(tb[k2])){ pos = ns.lastIndexOf(tb[k2]); break; }
+    }
+    var progress = pos >= 0 ? (pos + 2) / ns.length : 0;
+    if (progress >= 0.65 && !preDone){
+      preDone = true;
+      preScrollNext();
+    }
+    setStatus('🎤 듣는 중: ' + shown);
+  }
+
+  /* ---------- 음성 인식 ---------- */
+  function createRec(){
+    rec = new SR();
+    rec.lang = 'ko-KR';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onstart = function(){ setStatus('🎤 듣는 중: (말씀해 주세요)'); };
+
+    rec.onresult = function(e){
+      var t = '';
+      for (var i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+      handleSpeech(t);
+    };
+
+    rec.onerror = function(e){
+      if (e.error === 'no-speech' || e.error === 'aborted') return;   // onend에서 다시 시작
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+        stopMic('마이크 사용이 허용되지 않았습니다. 주소창 옆 마이크 권한을 허용해 주세요.');
+      } else if (e.error === 'audio-capture'){
+        stopMic('마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.');
+      } else if (e.error === 'network'){
+        stopMic('인터넷 연결 문제로 음성 인식이 중단되었습니다. 연결을 확인한 뒤 다시 시작해 주세요.');
+      } else {
+        stopMic('음성 인식 오류: ' + e.error);
+      }
+    };
+
+    rec.onend = function(){
+      if (!wantListen) return;
+      setTimeout(function(){
+        if (!wantListen) return;
+        try { rec.start(); } catch (err) { /* 이미 시작된 경우 무시 */ }
+      }, 300);
+    };
+  }
+
+  function startMic(){
+    if (!SR){ setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. PC 크롬이나 엣지에서 열어 주세요.'); return; }
+    if (editing){
+      if (!loadScript()){ setStatus('대본을 먼저 붙여넣어 주세요.'); return; }
+      setMode(false);
+    }
+    wantListen = true;
+    createRec();
+    try { rec.start(); } catch (err) { setStatus('시작 오류: ' + err.message); wantListen = false; return; }
+    $('btn-mic').classList.add('on');
+    $('btn-mic').textContent = '🎤 끄기';
+  }
+
+  function stopMic(msg){
+    wantListen = false;
+    try { if (rec) rec.stop(); } catch (err) {}
+    $('btn-mic').classList.remove('on');
+    $('btn-mic').textContent = '🎤 시작';
+    setStatus(msg || '🎤 꺼짐');
+  }
+
+  /* ---------- 버튼 ---------- */
+  $('btn-edit').addEventListener('click', function(){
+    if (editing){
+      if (loadScript()) setMode(false);
+    } else {
+      if (wantListen) stopMic();
+      setMode(true);
+    }
+  });
+  $('btn-mic').addEventListener('click', function(){ wantListen ? stopMic() : startMic(); });
+
+  $('btn-full').addEventListener('click', function(){
+    if (document.fullscreenElement) document.exitFullscreen();
+    else $('reader').requestFullscreen().catch(function(){ setStatus('전체화면을 열 수 없습니다.'); });
+  });
+  document.addEventListener('fullscreenchange', function(){
+    $('btn-full').textContent = document.fullscreenElement ? '⛶ 전체화면 닫기' : '⛶ 전체화면';
+    setTimeout(scrollToCur, 100);
+  });
+
+  function applySize(){
+    $('text').style.fontSize = readerPt + 'pt';
+    $('script-input').style.fontSize = readerPt + 'pt';
+    $('size-label').textContent = readerPt + 'pt';
+  }
+  $('btn-bigger').addEventListener('click', function(){ readerPt = Math.min(60, readerPt + 2); applySize(); });
+  $('btn-smaller').addEventListener('click', function(){ readerPt = Math.max(14, readerPt - 2); applySize(); });
+
+  $('th').addEventListener('input', function(){ $('th-label').textContent = $('th').value + '%'; });
+
+  // 문장을 클릭하면 그 문장을 시작 위치로
+  $('text').addEventListener('click', function(e){
+    var d = e.target.closest ? e.target.closest('.s') : null;
+    if (!d) return;
+    setCur(parseInt(d.dataset.i, 10));
+    setStatus('시작 위치: ' + (cur + 1) + '번째 문장');
+  });
+
+  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0){
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  }
+
+  if (!SR) setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. PC 크롬이나 엣지에서 열어 주세요.');
+})();
+</script>
+</body>
+</html>
