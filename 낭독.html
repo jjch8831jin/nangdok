@@ -14,7 +14,7 @@
     :root{--bg:#1c1c1e;--fg:#f2f2f7;--mut:#a1a1a6;--card:#2c2c2e;--hl:#665300;--accent:#ff6b5e;--bd:#48484a;--btn:#3a3a3c}
   }
   *{box-sizing:border-box}
-  body{margin:0;padding:12px;display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg);color:var(--fg);font:14pt/1.6 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif}
+  body{margin:0;padding:8px;display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg);color:var(--fg);font:14pt/1.6 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif}
   h1{font-size:14pt;margin:0 0 8px}
   .panel{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:10px}
   #script-input{display:block;width:100%;flex:1;min-height:0;font-family:inherit;font-size:14pt;line-height:1.9;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-top:none;border-radius:0;padding:14px 18px;resize:none;outline:none}
@@ -27,7 +27,7 @@
   .b-full{background:#0e8a96}
   .b-full.on{background:#d93025}
   .b-size{background:#d97a0b}
-  #size-label,#bar label,#counter{padding:2px 12px;border-radius:999px;font-weight:600}
+  #size-label,#bar label,#counter{padding:0 7px;border-radius:999px;font-weight:600;white-space:nowrap}
   #size-label{background:#fff1a8;color:#5a4a00}
   #bar label{background:#f0e3ff;color:#5b2a9e}
   #bar label input{accent-color:#7b4fc9}
@@ -41,10 +41,12 @@
     #counter{background:#1f3b66;color:#cfe0ff}
   }
   #reader{display:flex;flex-direction:column;flex:1;min-height:0;background:var(--bg)}
-  #bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px;background:var(--card);border:1px solid var(--bd);border-radius:10px 10px 0 0}
+  #bar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:5px 6px;line-height:1.5;background:var(--card);border:1px solid var(--bd);border-radius:10px 10px 0 0}
   #bar .sp{flex:1}
-  #bar label{display:flex;align-items:center;gap:6px}
-  #bar input[type=range]{width:120px}
+  #bar label{display:flex;align-items:center;gap:4px}
+  #bar button{padding:0 7px;white-space:nowrap}
+  #bar button.b-size{padding:0 6px}
+  #bar input[type=range]{width:50px;margin:0}
   #text{overflow-y:auto;flex:1;min-height:0;padding:14px 18px;border:1px solid var(--bd);border-top:none;font-size:14pt;line-height:1.9;scroll-behavior:auto}
   .s{padding:4px 8px;margin:2px 0;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all}
   .s.cur{background:var(--hl)}
@@ -61,7 +63,7 @@
 
 <div id="reader">
   <div id="bar">
-    <button id="btn-file" class="b-file" title="txt, 워드(docx), 한글(hwp, hwpx), PDF 파일을 대본 창으로 불러옵니다">📂 파일 불러오기</button>
+    <button id="btn-file" class="b-file" title="txt, 워드(docx), 한글(hwp, hwpx), PDF 파일을 대본 창으로 불러옵니다">📂 불러오기</button>
     <input type="file" id="file-input" accept=".txt,.md,.docx,.pdf,.hwp,.hwpx,text/plain" hidden>
     <button id="btn-edit" class="b-edit" title="대본을 붙여넣거나 고칠 때 누르세요">✔ 완료</button>
     <button id="btn-mic" class="b-mic" title="마이크로 읽는 소리를 듣고 따라갑니다">🎤 시작</button>
@@ -69,8 +71,8 @@
     <button id="btn-smaller" class="b-size">A−</button>
     <button id="btn-bigger" class="b-size">A+</button>
     <span id="size-label">14pt</span>
-    <label>겹침 기준 <input type="range" id="th" min="30" max="90" step="5" value="50"><span id="th-label">50%</span></label>
-    <label class="l-adv" title="현재 문장을 이만큼 읽었다고 인식되면 다음 문장으로 넘어갑니다">넘김 시점 <input type="range" id="adv" min="50" max="90" step="5" value="70"><span id="adv-label">70%</span></label>
+    <label title="겹침 기준: 말한 소리가 대본 문장과 이만큼 비슷해야 그 문장으로 옮겨갑니다(높이면 엄격)">겹침 <input type="range" id="th" min="30" max="90" step="5" value="50"><span id="th-label">50%</span></label>
+    <label class="l-adv" title="넘김 시점: 현재 문장을 이만큼 읽었다고 인식되면 다음 문장으로 넘어갑니다">넘김 <input type="range" id="adv" min="50" max="90" step="5" value="70"><span id="adv-label">70%</span></label>
     <span class="sp"></span>
     <span id="counter">0 / 0</span>
   </div>
@@ -610,7 +612,7 @@
     else $('reader').requestFullscreen().catch(function(){ setStatus('전체화면을 열 수 없습니다.'); });
   });
   document.addEventListener('fullscreenchange', function(){
-    $('btn-full').textContent = document.fullscreenElement ? '✖ 전체화면 닫기' : '⛶ 전체화면';
+    $('btn-full').textContent = document.fullscreenElement ? '✖ 닫기' : '⛶ 전체화면';
     $('btn-full').classList.toggle('on', !!document.fullscreenElement);
     setTimeout(scrollToCur, 100);
   });
