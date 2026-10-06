@@ -16,6 +16,8 @@
   *{box-sizing:border-box}
   body{margin:0;padding:8px;display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg);color:var(--fg);font:14pt/1.6 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif}
   h1{font-size:14pt;margin:0 0 8px}
+  .ver{font-weight:400;color:var(--mut);margin-left:6px}
+  .b-log{background:#6e6e73;margin-left:10px;padding:0 10px}
   .panel{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:10px}
   #script-input{display:block;width:100%;flex:1;min-height:0;font-family:inherit;font-size:14pt;line-height:2;color:var(--fg);background:var(--read-bg);border:1px solid var(--bd);border-top:none;border-radius:0;padding:14px 18px;resize:none;outline:none}
   button{font-family:inherit;font-size:14pt;color:#fff;background:#6e6e73;border:none;border-radius:8px;padding:4px 14px;cursor:pointer;font-weight:600}
@@ -65,7 +67,7 @@
 </head>
 <body>
 
-<h1>🎤 낭독</h1>
+<h1>🎤 낭독 <span class="ver" id="ver">v1006-1</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
 
 <div id="reader">
   <div id="bar">
@@ -105,6 +107,10 @@
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
   var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
+  var APP_VERSION = 'v1006-1';
+  var logRows = [], decision = '', lastCurScore = 0, lastLocked = false;   // 인식 기록(흔들림 분석용)
+  var lastHeard = 0, wakeLock = null, silenceTimer = null, saveTimer = null, editStartText = '';
+  var lockUntil = 0, advTimer = null;             // 지금 문장에 '올인'하는 시간 / 넘김 대기 타이머
   var farIdx = -1, farCount = 0;                  // 먼 문장으로 옮길 때 연속 확인용
   var advCount = 0, lastAdvance = 0;              // 다음 문장으로 넘길 때 연속 확인용
   var df = {};                                    // 2글자 묶음이 대본의 몇 문장에 나오는지
@@ -118,6 +124,26 @@
   var BEHIND = 2, AHEAD = 12, TAIL = 20;
 
   function norm(s){ return s.replace(/[^\p{L}\p{N}]/gu, ''); }
+
+  // 대본의 한자 주석은 말로 읽지 않으므로, 비교할 때만 뺌 (화면 글은 그대로)
+  function stripNotes(s){
+    return s.replace(/[\u4e00-\u9fff\u3400-\u4dbf]+\s*[(（]\s*([가-힣]+)\s*[)）]/g, '$1')        // 水氣(수기) → 수기
+            .replace(/[(（][^)）]*[\u4e00-\u9fff\u3400-\u4dbf][^)）]*[)）]/g, '');                 // 수기(水氣) → 수기
+  }
+  function matchNorm(s){ var m = norm(stripNotes(s)); return m.length ? m : norm(s); }
+
+  // 이 컴퓨터(브라우저)에만 저장: 대본, 읽던 위치, 글자 크기
+  function lsGet(k){ try { return localStorage.getItem('nangdok:' + k); } catch (e) { return null; } }
+  function lsSet(k, v){ try { localStorage.setItem('nangdok:' + k, v); } catch (e) { /* 저장 공간 부족 등은 무시 */ } }
+
+  // 인식 기록
+  function pad2(n){ return (n < 10 ? '0' : '') + n; }
+  function fmtTime(t){
+    var d = new Date(t), ms = d.getMilliseconds();
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) + '.' + (ms < 10 ? '00' : ms < 100 ? '0' : '') + ms;
+  }
+  function pushLog(row){ logRows.push(row); if (logRows.length > 500) logRows.shift(); }
+  function logNote(msg){ pushLog({ t: Date.now(), note: msg, to: cur }); }
   function bigrams(s){ var a = []; for (var i = 0; i < s.length - 1; i++) a.push(s.slice(i, i + 2)); return a; }
   function setStatus(m){ $('status').textContent = m; }
   // 슬라이더는 가운데가 0(기본). 오른쪽(+)일수록 빠르게, 왼쪽(-)일수록 느리게
@@ -125,8 +151,13 @@
     var s = parseInt($('th').value, 10);
     return (s >= 0 ? 50 - s * 2 : 50 - s * 4) / 100;
   }
-  function advancePoint(){     // 넘김 시점: 기본 70%, 오른쪽 끝 50%(일찍), 왼쪽 끝 90%(늦게)
-    return (70 - parseInt($('adv').value, 10) * 2) / 100;
+  function advancePoint(){     // 넘김 시점: 0 = 문장 끝(97%)까지 읽은 뒤, 오른쪽 끝(+10)은 70%에서 일찍
+    var s = parseInt($('adv').value, 10);
+    return s > 0 ? 0.97 - s * 0.027 : 0.97;
+  }
+  function advanceDelay(){     // 왼쪽(-)일수록 문장을 다 읽은 뒤 조금 더 기다렸다가 넘김 (최대 1.5초)
+    var s = parseInt($('adv').value, 10);
+    return s < 0 ? -s * 150 : 0;
   }
   function signed(v){ v = parseInt(v, 10); return v > 0 ? '+' + v : String(v); }
 
@@ -406,7 +437,7 @@
   function loadScript(){
     var text = $('script-input').value;
     sentences = splitScript(text);
-    norms = sentences.map(norm);
+    norms = sentences.map(matchNorm);
     sets = norms.map(function(n){ return new Set(bigrams(n)); });
     df = {};
     sets.forEach(function(st){ st.forEach(function(bg){ df[bg] = (df[bg] || 0) + 1; }); });
@@ -425,6 +456,7 @@
     box.scrollTop = 0;
     if (els.length) els[0].classList.add('cur');
     updateCounter();
+    lsSet('script', text); lsSet('cur', '0');
     setStatus(sentences.length ? ('대본 ' + sentences.length + '문장을 불러왔습니다.') : '불러올 문장이 없습니다.');
     return sentences.length > 0;
   }
@@ -444,10 +476,14 @@
   function setCur(i){
     if (els[cur]) els[cur].classList.remove('cur');
     cur = i;
-    holdIdx = -1;
+    holdIdx = -1; holdUntil = 0; holdFin = 0;
     advCount = 0;
+    lockUntil = 0;
+    clearTimeout(advTimer); advTimer = null;
     if (els[cur]) els[cur].classList.add('cur');
     updateCounter();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function(){ lsSet('cur', String(cur)); }, 400);
   }
 
   /* ---------- 스크롤 ---------- */
@@ -523,6 +559,7 @@
 
   // 지금 문장을 얼마나 읽었는지: 말 끝부분이 문장 안에 '이어서' 들어 있는 위치로 계산
   function readProgress(tail, idx){
+    if (idx < 0 || !norms[idx]) return 0;
     var ns = norms[idx];
     for (var len = Math.min(tail.length, 12); len >= 4; len--){
       var p = ns.indexOf(tail.slice(tail.length - len));
@@ -563,10 +600,37 @@
     missCount = 0; recIdx = -1; recCount = 0; farIdx = -1; farCount = 0;
     lastUserScroll = 0;
     scrollToCur();
+    logNote('되돌리기 → ' + (cur + 1) + '번째 문장');
     setStatus('↩ ' + (cur + 1) + '번째 문장으로 되돌렸습니다.');
   });
 
+  function doAdvance(){
+    if (cur + 1 >= sentences.length) return;
+    var prev = cur;
+    setCur(cur + 1);
+    holdIdx = prev;
+    holdUntil = Date.now() + 12000;
+    holdFin = 0;
+    lastAdvance = Date.now();
+    logNote('넘김 ' + (prev + 1) + '→' + (cur + 1));
+    scrollToCur();
+  }
+  function scheduleAdvance(idx, ms){
+    if (advTimer) return;
+    advTimer = setTimeout(function(){
+      advTimer = null;
+      if (cur === idx) doAdvance();
+    }, ms);
+  }
+
   function handleSpeech(text){
+    var before = cur;
+    decision = '';
+    handleSpeechCore(text);
+    pushLog({ t: Date.now(), tail: text.replace(/\s+/g, ' ').slice(-28), from: before, to: cur, dec: decision || (lastLocked ? '유지(올인)' : '유지'), cs: lastCurScore });
+  }
+
+  function handleSpeechCore(text){
     if (!sentences.length) return;
     var full = norm(text);
     var nowT = Date.now();
@@ -574,7 +638,7 @@
     lastEventTime = nowT;
     lastNormLen = full.length;
     var n = full.slice(baseLen);
-    if (n.length < 4) return;
+    if (n.length < 4){ decision = '짧아서 무시'; return; }
     var tail = n.slice(-TAIL);
     var W = weightsFor(tail);
     if (!W) return;
@@ -582,6 +646,10 @@
     var th = threshold();
     var from = Math.max(0, cur - BEHIND), to = Math.min(sentences.length - 1, cur + AHEAD);
     var curScore = scoreSentence(cur, tail, W);
+    // 지금 문장이 맞고 있으면 5초 동안 '올인': 다음 문장으로 넘어가는 것 외에는 다른 문장으로 옮기지 않음
+    if (curScore >= th * 0.7) lockUntil = Math.max(lockUntil, nowT + 5000);
+    var locked = nowT < lockUntil;
+    lastCurScore = curScore; lastLocked = locked;
     // 방금 넘어온 앞 문장은 '다 읽을 때까지' 되돌아가지 않게 막음 (새 문장을 읽기 시작하면 바로 풀림)
     var holdOn = Date.now() < holdUntil;
     if (holdOn){
@@ -605,7 +673,7 @@
       if (score < need) continue;
       if (isFar){
         if (n.length < 14) continue;
-        if (curScore >= th * 0.7 && score < curScore + 0.35) continue;   // 지금 문장을 읽는 중이면 먼 문장으로 안 옮김
+        if (locked) continue;   // 지금 문장을 읽는 중이면 먼 문장으로 안 옮김
         if (i === blockIdx && Date.now() < blockUntil) continue;
         if (score > farScore){ far = i; farScore = score; }
         continue;
@@ -614,8 +682,8 @@
         // 같은 단어(예: '수기')가 여러 문장에 있어도, 지금 문장에 없고 이 문장에만 있는 말이 있어야 옮김
         var uniq = scoreSentence(i, tail, W, cur);
         if (uniq < 0.15) continue;
-        // 지금 문장을 읽고 있는 중이면 안 흔들리게: 다른 문장이 훨씬 확실할 때만
-        if (curScore >= th * 0.7 && (score < curScore + 0.35 || uniq < 0.30)) continue;
+        // 지금 문장을 읽고 있는 중이면 올인: 바로 다음 문장이 그 문장에만 있는 말로 확실히 맞을 때만 옮김
+        if (locked && (i !== cur + 1 || uniq < 0.30 || score < th + 0.10 || score < curScore)) continue;
       }
       if (score > nearScore + 0.02 || (Math.abs(score - nearScore) <= 0.02 && near >= 0 && Math.abs(i - cur) < Math.abs(near - cur))){
         near = i; nearScore = score;
@@ -632,7 +700,7 @@
     var note = '', best = -1, bigMove = false;
     if (far >= 0 && (near < 0 || farScore >= nearScore + 0.10)){
       if (far === farIdx) farCount++; else { farIdx = far; farCount = 1; }
-      if (farCount < 3){ setStatus('🎤 듣는 중: ' + shown + '  (먼 문장 확인 중)'); return; }
+      if (farCount < 3){ decision = '먼 문장 확인 중 → ' + (far + 1) + ' (' + farCount + '/3)'; setStatus('🎤 듣는 중: ' + shown + '  (먼 문장 확인 중)'); return; }
       best = far; bigMove = true; farIdx = -1; farCount = 0;
     } else {
       farIdx = -1; farCount = 0;
@@ -641,8 +709,9 @@
 
     if (best < 0){
       missCount++;
-      var jump = (missCount >= 4 && n.length >= 14) ? findGlobal(tail, W) : -1;
+      var jump = (missCount >= 4 && n.length >= 14 && !locked) ? findGlobal(tail, W) : -1;
       if (jump < 0){
+        decision = '맞는 문장 없음(연속 ' + missCount + (locked ? ', 올인 중' : '') + ')';
         setStatus('🎤 듣는 중: ' + shown + '  (대본과 맞지 않아 무시)');
         return;
       }
@@ -652,33 +721,31 @@
     }
     if (bigMove) note = '  ⚠ ' + (best + 1) + '번째 문장으로 이동';
 
-    // 위쪽 문장으로 되돌아가는 것은 같은 문장이 연속 2번 나올 때만
-    if (best >= 0 && best < cur && !bigMove){
+    // 위쪽 문장이나 바로 다음이 아닌 문장(건너뛰기)으로 옮기는 것은 같은 문장이 연속 2번 나올 때만
+    if (best >= 0 && (best < cur || best >= cur + 2) && !bigMove){
       if (best === backIdx) backCount++; else { backIdx = best; backCount = 1; }
-      if (backCount < 2){ setStatus('🎤 듣는 중: ' + shown); return; }
+      if (backCount < 2){ decision = '이동 확인 중 → ' + (best + 1) + ' (1/2)'; setStatus('🎤 듣는 중: ' + shown); return; }
     }
     backIdx = -1; backCount = 0;
     if (best !== cur){
       var before = cur;
       setCur(best);
+      decision = '이동 ' + (before + 1) + '→' + (best + 1) + (bigMove ? ' ⚠먼 이동' : '');
       if (bigMove) showUndo(before, best);
       scrollToCur();
     }
 
-    // 현재 문장을 충분히 읽었으면 다음 문장으로 (연속 2번 확인, 0.8초 간격)
+    // 현재 문장을 충분히 읽었으면 다음 문장으로
+    // (문장 끝까지 읽은 경우는 1번, 그 전에 일찍 넘길 때는 연속 2번 확인 / 0.8초 간격)
     // 단, 말한 글자가 다른 문장과도 똑같이 맞는 경우(끝말이 같은 문장들 등)에는 넘기지 않음
     var otherMax = 0;
     for (var key2 in scores){ if (parseInt(key2, 10) !== cur && scores[key2] > otherMax) otherMax = scores[key2]; }
-    if (readProgress(tail, cur) >= advancePoint() && cur + 1 < sentences.length && curScore - otherMax >= 0.10){
+    var progress = readProgress(tail, cur);
+    if (progress >= advancePoint() && cur + 1 < sentences.length && curScore - otherMax >= 0.10){
       advCount++;
-      if (advCount >= 2 && Date.now() - lastAdvance > 800){
-        var prev = cur;
-        setCur(cur + 1);
-        holdIdx = prev;
-        holdUntil = Date.now() + 12000;
-        holdFin = 0;
-        lastAdvance = Date.now();
-        scrollToCur();
+      if ((advCount >= 2 || progress >= 0.97) && Date.now() - lastAdvance > 800){
+        var delay = advanceDelay();
+        if (delay > 0) scheduleAdvance(cur, delay); else doAdvance();
       }
     } else {
       advCount = 0;
@@ -694,15 +761,17 @@
     rec.interimResults = true;
     rec.maxAlternatives = 1;
 
-    rec.onstart = function(){ baseLen = 0; lastNormLen = 0; lastEventTime = 0; setStatus('🎤 듣는 중: (말씀해 주세요)'); };
+    rec.onstart = function(){ baseLen = 0; lastNormLen = 0; lastEventTime = 0; lastHeard = Date.now(); setStatus('🎤 듣는 중: (말씀해 주세요)'); };
 
     rec.onresult = function(e){
+      lastHeard = Date.now();
       var t = '';
       for (var i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
       handleSpeech(t);
     };
 
     rec.onerror = function(e){
+      logNote('인식 오류: ' + e.error);
       if (e.error === 'no-speech' || e.error === 'aborted') return;   // onend에서 다시 시작
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
         stopMic('마이크가 차단되어 있습니다. 주소창 왼쪽 자물쇠 아이콘 → 마이크를 「허용」으로 바꾼 뒤 다시 시작해 주세요.');
@@ -727,7 +796,9 @@
   function startMic(){
     if (!SR){ setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. PC 크롬이나 엣지에서 열어 주세요.'); return; }
     if (editing){
+      var same = ($('script-input').value === editStartText), pos = cur;
       if (!loadScript()){ setStatus('대본을 먼저 붙여넣어 주세요.'); return; }
+      if (same && pos > 0 && pos < sentences.length) setCur(pos);
       setMode(false);
     }
     wantListen = true;
@@ -735,6 +806,9 @@
     try { rec.start(); } catch (err) { setStatus('시작 오류: ' + err.message); wantListen = false; return; }
     $('btn-mic').classList.add('on');
     $('btn-mic').textContent = '🎤 끄기';
+    logNote('마이크 시작');
+    requestWake();
+    startSilenceWatch();
     if (navigator.permissions && navigator.permissions.query){
       navigator.permissions.query({ name: 'microphone' }).then(function(r){
         if (r.state === 'prompt') setStatus('마이크 허용 창이 뜨면 「허용」을 눌러 주세요(「이번에만 허용」은 매번 묻습니다).');
@@ -747,34 +821,54 @@
     try { if (rec) rec.stop(); } catch (err) {}
     $('btn-mic').classList.remove('on');
     $('btn-mic').textContent = '🎤 시작';
+    logNote('마이크 끔' + (msg ? ' (' + msg + ')' : ''));
+    releaseWake();
+    stopSilenceWatch();
     setStatus(msg || '🎤 꺼짐');
   }
+
+  // 마이크가 켜져 있는 동안 화면이 꺼지거나 어두워지지 않게 함 (지원하는 브라우저만)
+  function requestWake(){
+    try {
+      if (navigator.wakeLock && wantListen){
+        navigator.wakeLock.request('screen').then(function(l){
+          wakeLock = l;
+          l.addEventListener('release', function(){ wakeLock = null; });
+        }).catch(function(){});
+      }
+    } catch (err) {}
+  }
+  function releaseWake(){ try { if (wakeLock) wakeLock.release(); } catch (err) {} wakeLock = null; }
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible' && wantListen && !wakeLock) requestWake();
+  });
+
+  // 10초 넘게 아무 소리도 인식되지 않으면 알려 줌
+  function startSilenceWatch(){
+    clearInterval(silenceTimer);
+    lastHeard = Date.now();
+    silenceTimer = setInterval(function(){
+      if (wantListen && Date.now() - lastHeard > 10000){
+        setStatus('🎤 소리가 들리지 않습니다 (10초 넘게 인식 없음). 마이크 연결과 음량을 확인해 주세요.');
+      }
+    }, 1000);
+  }
+  function stopSilenceWatch(){ clearInterval(silenceTimer); silenceTimer = null; }
 
   /* ---------- 버튼 ---------- */
   $('btn-edit').addEventListener('click', function(){
     if (editing){
-      if (loadScript()) setMode(false);
+      var same = ($('script-input').value === editStartText), pos = cur;
+      if (loadScript()){
+        if (same && pos > 0 && pos < sentences.length) setCur(pos);   // 고치지 않았으면 읽던 위치 유지
+        setMode(false);
+      }
     } else {
       if (wantListen) stopMic();
+      editStartText = $('script-input').value;
       setMode(true);
     }
   });
-  $('btn-file').addEventListener('click', function(){ $('file-input').click(); });
-  $('file-input').addEventListener('change', function(e){
-    var f = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!f) return;
-    setStatus('「' + f.name + '」 읽는 중…');
-    readFileText(f).then(function(text){
-      if (wantListen) stopMic();
-      $('script-input').value = text;
-      setMode(true);
-      setStatus('「' + f.name + '」 파일을 불러왔습니다. 내용을 확인하고 ✔ 완료를 누르세요.');
-    }).catch(function(err){
-      setStatus('파일을 불러오지 못했습니다: ' + (err && err.message ? err.message : '알 수 없는 오류'));
-    });
-  });
-
   $('btn-mic').addEventListener('click', function(){ wantListen ? stopMic() : startMic(); });
 
   $('btn-full').addEventListener('click', function(){
@@ -790,6 +884,7 @@
   function applySize(){
     $('text').style.fontSize = readerPt + 'pt';
     $('script-input').style.fontSize = readerPt + 'pt';
+    lsSet('pt', String(readerPt));
     $('size-label').textContent = readerPt + 'pt';
   }
   $('btn-bigger').addEventListener('click', function(){ readerPt = Math.min(60, readerPt + 2); applySize(); });
@@ -818,6 +913,7 @@
     hideUndo();
     lastUserScroll = 0;
     scrollToCur();
+    logNote('클릭으로 ' + (cur + 1) + '번째 문장 선택');
     setStatus('시작 위치: ' + (cur + 1) + '번째 문장');
   });
 
@@ -832,7 +928,92 @@
   }
   resetSliders();
   window.addEventListener('pageshow', resetSliders);
-  applySize();   // 대본 글자 크기를 기본값(24pt)으로
+
+  // 키보드: ↑ ↓ 로 현재 문장을 한 문장씩 옮김, 스페이스바로 🎤 켜기/끄기 (대본 입력 중에는 작동 안 함)
+  document.addEventListener('keydown', function(e){
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    var tn = e.target && e.target.tagName;
+    if (tn === 'TEXTAREA' || tn === 'INPUT' || tn === 'SELECT' || editing) return;
+    if (e.key === ' '){
+      e.preventDefault();
+      if (wantListen) stopMic(); else startMic();
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      if (!sentences.length) return;
+      e.preventDefault();
+      var ni = Math.max(0, Math.min(sentences.length - 1, cur + (e.key === 'ArrowDown' ? 1 : -1)));
+      if (ni === cur) return;
+      setCur(ni);
+      baseLen = lastNormLen;
+      missCount = 0; recIdx = -1; recCount = 0; farIdx = -1; farCount = 0;
+      hideUndo();
+      lastUserScroll = 0;
+      scrollToCur();
+      logNote('키보드로 ' + (cur + 1) + '번째 문장 선택');
+      setStatus('수동 이동: ' + (cur + 1) + '번째 문장');
+    }
+  });
+  // 버튼을 누른 뒤에는 포커스를 풀어서, 스페이스바가 같은 버튼을 다시 누르지 않게 함
+  document.addEventListener('click', function(e){ if (e.target && e.target.tagName === 'BUTTON') e.target.blur(); });
+
+  // 인식 기록 복사
+  function buildLogText(){
+    var L = [];
+    L.push('낭독 기록 ' + APP_VERSION + ' / ' + new Date().toLocaleString('ko-KR'));
+    L.push('겹침 ' + signed($('th').value) + ' · 넘김 ' + signed($('adv').value) + ' · 대본 ' + sentences.length + '문장 · 글자 ' + readerPt + 'pt');
+    var used = {};
+    logRows.forEach(function(r){ if (r.from != null) used[r.from] = 1; if (r.to != null) used[r.to] = 1; });
+    L.push('--- 기록에 나온 문장 (번호: 앞부분) ---');
+    Object.keys(used).map(Number).sort(function(a, b){ return a - b; }).forEach(function(i){
+      if (sentences[i]) L.push((i + 1) + ': ' + sentences[i].slice(0, 30));
+    });
+    L.push('--- 기록 (시각 [문장 번호] 판단 | 지금 문장 점수 | 인식한 글자) ---');
+    logRows.forEach(function(r){
+      if (r.note){ L.push(fmtTime(r.t) + ' ※ ' + r.note); return; }
+      var pos = '[' + (r.from + 1) + (r.from !== r.to ? '→' + (r.to + 1) : '') + ']';
+      L.push(fmtTime(r.t) + ' ' + pos + ' ' + r.dec + ' | ' + r.cs.toFixed(2) + ' | ' + r.tail);
+    });
+    return L.join('\n');
+  }
+  $('btn-log').addEventListener('click', function(){
+    var text = buildLogText(), n = logRows.length;
+    function done(){ setStatus('📋 기록 ' + n + '줄을 복사했습니다. 붙여넣어 보내 주세요.'); }
+    function fallback(){
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (err) { setStatus('복사하지 못했습니다.'); }
+      document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else { fallback(); }
+  });
+
+  // 대본은 입력할 때마다 이 컴퓨터에 저장
+  var scriptSaveTimer = null;
+  $('script-input').addEventListener('input', function(){
+    clearTimeout(scriptSaveTimer);
+    scriptSaveTimer = setTimeout(function(){ lsSet('script', $('script-input').value); }, 600);
+  });
+
+  // 열 때: 마지막 글자 크기와, 읽던 대본·위치를 이어서 불러옴
+  (function restore(){
+    var pt = parseInt(lsGet('pt'), 10);
+    if (pt >= 14 && pt <= 60) readerPt = pt;
+    applySize();
+    var saved = lsGet('script'), si = parseInt(lsGet('cur'), 10);
+    if (saved && saved.trim()){
+      $('script-input').value = saved;
+      editStartText = saved;
+      if (loadScript()){
+        if (si > 0 && si < sentences.length) setCur(si);
+        setMode(false);
+        setStatus('이전에 읽던 대본을 불러왔습니다. (' + (cur + 1) + '번째 문장부터)');
+      }
+    }
+  })();
 
   // 앱 창(주소창 없는 창)으로 열렸을 때 화면에서 쓸 수 있는 크기만큼 창을 키움 (일반 탭에서는 브라우저가 무시함)
   try {
