@@ -52,6 +52,7 @@
   .s{padding:.2em 8px;margin:0 0 1em;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all;opacity:.5;transition:opacity .15s}
   .s:hover{opacity:.8}
   .s.cur{background:var(--hl);opacity:1}
+  #btn-undo{display:none;position:absolute;left:26px;bottom:60px;z-index:5;background:#d97a0b;border-radius:999px;padding:2px 16px;box-shadow:0 2px 8px rgba(0,0,0,.35);font-size:18pt}
   #btn-top{display:none;position:absolute;right:26px;bottom:60px;z-index:5;background:#2a5bbf;border-radius:999px;padding:2px 16px;box-shadow:0 2px 8px rgba(0,0,0,.35);font-size:18pt}
   #status{padding:6px 10px;border:1px solid var(--bd);border-top:none;border-radius:0 0 10px 10px;color:var(--mut);background:var(--card);min-height:2em}
   #reader:fullscreen{height:100vh;padding:0}
@@ -81,6 +82,7 @@
   </div>
   <textarea id="script-input" placeholder="여기에 대본을 붙여넣고 ✔ 완료를 누르세요. 줄바꿈과 마침표(. ? !) 기준으로 문장을 나눕니다."></textarea>
   <div id="text" style="display:none"></div>
+  <button id="btn-undo" title="방금 먼 문장으로 옮겨진 것을 원래 문장으로 되돌립니다">↩ 되돌리기</button>
   <button id="btn-top" title="대본 맨 위로 이동합니다">⬆ 위로</button>
   <div id="status"></div>
 </div>
@@ -95,11 +97,15 @@
   var sets = [];        // 문장별 2글자 묶음 집합
   var els = [];         // 문장 DOM
   var cur = 0;
-  var holdIdx = -1;     // 방금 넘어온 문장(말이 아직 끝나는 중이라 되돌아가지 않게 잠깐 막음)
-  var holdUntil = 0;
+  var holdIdx = -1;     // 방금 넘어온 문장(말이 아직 끝나는 중이라 되돌아가지 않게 막음)
+  var holdUntil = 0, holdFin = 0;
   var baseLen = 0, lastNormLen = 0;   // 클릭 전에 인식된 글자는 비교에서 뺌
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 위쪽 문장으로 되돌아갈 때 연속 확인용
+  var farIdx = -1, farCount = 0;                  // 먼 문장으로 옮길 때 연속 확인용
+  var advCount = 0, lastAdvance = 0;              // 다음 문장으로 넘길 때 연속 확인용
+  var df = {};                                    // 2글자 묶음이 대본의 몇 문장에 나오는지
+  var undoIdx = -1, blockIdx = -1, blockUntil = 0, undoTimer = null;   // 먼 이동 되돌리기용
   var wantListen = false;
   var rec = null;
   var readerPt = 14;
@@ -392,6 +398,9 @@
     sentences = splitScript(text);
     norms = sentences.map(norm);
     sets = norms.map(function(n){ return new Set(bigrams(n)); });
+    df = {};
+    sets.forEach(function(st){ st.forEach(function(bg){ df[bg] = (df[bg] || 0) + 1; }); });
+    farIdx = -1; farCount = 0; advCount = 0; backIdx = -1; backCount = 0; undoIdx = -1;
     var box = $('text');
     box.innerHTML = '';
     els = sentences.map(function(s, i){
@@ -426,6 +435,7 @@
     if (els[cur]) els[cur].classList.remove('cur');
     cur = i;
     holdIdx = -1;
+    advCount = 0;
     if (els[cur]) els[cur].classList.add('cur');
     updateCounter();
   }
@@ -456,9 +466,32 @@
   });
 
   /* ---------- 문장 비교 ---------- */
+  // 여러 문장에 나오는 흔한 말은 점수를 낮추고, 한두 문장에만 나오는 말은 높게 침
+  function rarity(bg){
+    var N = sentences.length;
+    if (N < 8) return 1;
+    var c = df[bg] || 0;
+    if (c <= 0) return 1;
+    var f = c / N;
+    if (f <= 0.05) return 1;
+    if (f >= 0.4) return 0.25;
+    return 1 - (f - 0.05) * (0.75 / 0.35);
+  }
+
+  function weightsFor(tail){
+    var tb = bigrams(tail);
+    if (!tb.length) return null;
+    var wts = [], total = 0;
+    for (var k = 0; k < tb.length; k++){
+      var w = (k + 1) * rarity(tb[k]);   // 최근에 말한 부분일수록 가중치↑
+      wts.push(w); total += w;
+    }
+    return { wts: wts, total: total };
+  }
+
   // 말한 글자(tail)가 문장에 '이어서, 순서대로' 들어 있는 만큼 점수를 냄
   // (짧게 떨어진 일치는 점수를 깎아서 '고목나무' 같은 반복 표현만으로는 점수가 같아지지 않게 함)
-  function scoreSentence(i, tail, total){
+  function scoreSentence(i, tail, W){
     var ns = norms[i], L = tail.length, k = 0, covered = 0;
     while (k < L - 1){
       var m = 2;
@@ -466,29 +499,60 @@
       var r = m - 2;                 // 이어서 맞은 2글자 묶음 개수
       if (r >= 1){
         var w = 0;
-        for (var t = k; t < k + r; t++) w += (t + 1);   // 최근에 말한 부분일수록 가중치↑
+        for (var t = k; t < k + r; t++) w += W.wts[t];
         covered += w * (r >= 3 ? 1 : (r === 2 ? 0.5 : 0));
         k += r;
       } else {
         k++;
       }
     }
-    return covered / total;
+    return covered / W.total;
   }
 
-  // 앞뒤 범위에서 못 찾는 상태가 이어질 때, 대본 전체에서 찾음 (확실할 때만)
-  function findGlobal(tail, total){
-    var need = Math.max(threshold() + 0.15, 0.65), best = -1, s1 = 0, s2 = 0;
+  // 지금 문장을 얼마나 읽었는지: 말 끝부분이 문장 안에 '이어서' 들어 있는 위치로 계산
+  function readProgress(tail, idx){
+    var ns = norms[idx];
+    for (var len = Math.min(tail.length, 12); len >= 4; len--){
+      var p = ns.indexOf(tail.slice(tail.length - len));
+      if (p >= 0) return (p + len) / ns.length;
+    }
+    return 0;
+  }
+
+  // 앞뒤 범위에서 못 찾는 상태가 이어질 때, 대본 전체에서 찾음 (아주 확실할 때만)
+  function findGlobal(tail, W){
+    var need = Math.max(threshold() + 0.30, 0.80), best = -1, s1 = 0, s2 = 0;
     for (var i = 0; i < sentences.length; i++){
-      var score = scoreSentence(i, tail, total);
+      if (i === blockIdx && Date.now() < blockUntil) continue;
+      var score = scoreSentence(i, tail, W);
       if (score > s1){ s2 = s1; s1 = score; best = i; }
       else if (score > s2){ s2 = score; }
     }
-    if (best < 0 || s1 < need || s1 - s2 < 0.15 || (best <= holdIdx && Date.now() < holdUntil)){ recIdx = -1; recCount = 0; return -1; }   // 비슷한 문장이 여럿이거나 방금 지나온 곳이면 옮기지 않음
+    if (best < 0 || s1 < need || s1 - s2 < 0.25 || (best <= holdIdx && Date.now() < holdUntil)){ recIdx = -1; recCount = 0; return -1; }   // 비슷한 문장이 여럿이거나 방금 지나온 곳이면 옮기지 않음
     if (best === recIdx) recCount++; else { recIdx = best; recCount = 1; }
-    if (recCount >= 2){ recIdx = -1; recCount = 0; missCount = 0; return best; }
+    if (recCount >= 3){ recIdx = -1; recCount = 0; missCount = 0; return best; }
     return -1;
   }
+
+  // 먼 이동 뒤 5초 동안 '되돌리기' 버튼을 보여 줌
+  function showUndo(fromIdx, toIdx){
+    undoIdx = fromIdx; blockIdx = toIdx;
+    $('btn-undo').style.display = 'block';
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(function(){ $('btn-undo').style.display = 'none'; }, 5000);
+  }
+  function hideUndo(){ clearTimeout(undoTimer); $('btn-undo').style.display = 'none'; }
+  $('btn-undo').addEventListener('click', function(){
+    hideUndo();
+    if (undoIdx < 0 || undoIdx >= sentences.length) return;
+    setCur(undoIdx);
+    baseLen = lastNormLen;                 // 되돌린 뒤에는 그때까지 한 말을 비교에서 뺌
+    blockUntil = Date.now() + 10000;       // 방금 옮겨졌던 문장으로는 잠시 다시 옮기지 않음
+    missCount = 0; recIdx = -1; recCount = 0; farIdx = -1; farCount = 0;
+    lastUserScroll = 0;
+    scrollToCur();
+    setStatus('↩ ' + (cur + 1) + '번째 문장으로 되돌렸습니다.');
+  });
 
   function handleSpeech(text){
     if (!sentences.length) return;
@@ -497,68 +561,106 @@
     var n = full.slice(baseLen);
     if (n.length < 4) return;
     var tail = n.slice(-TAIL);
-    var tb = bigrams(tail);
-    if (!tb.length) return;
-    var total = 0;
-    tb.forEach(function(_, k){ total += (k + 1); });   // 최근에 말한 부분일수록 가중치↑
+    var W = weightsFor(tail);
+    if (!W) return;
 
     var th = threshold();
-    var best = -1, bestScore = 0;
     var from = Math.max(0, cur - BEHIND), to = Math.min(sentences.length - 1, cur + AHEAD);
-    var curScore = scoreSentence(cur, tail, total);
+    var curScore = scoreSentence(cur, tail, W);
+    // 방금 넘어온 앞 문장은 '다 읽을 때까지' 되돌아가지 않게 막음 (새 문장을 읽기 시작하면 바로 풀림)
     var holdOn = Date.now() < holdUntil;
+    if (holdOn){
+      if (curScore >= th) holdOn = false;
+      else {
+        if (!holdFin && readProgress(tail, holdIdx) >= 0.95) holdFin = Date.now();
+        if (holdFin && Date.now() - holdFin > 1500) holdOn = false;
+      }
+      if (!holdOn) holdUntil = 0;
+    }
+    var near = -1, nearScore = 0, far = -1, farScore = 0, scores = {};
     for (var i = from; i <= to; i++){
       if (holdOn && i <= holdIdx) continue;    // 방금 넘어온 문장과 그 위쪽은 잠시 제외
-      var score = (i === cur) ? curScore : scoreSentence(i, tail, total);
+      var score = (i === cur) ? curScore : scoreSentence(i, tail, W);
+      scores[i] = score;
+      var isFar = i > cur + 3;
       var need = th;
-      if (i > cur + 3) need += 0.15;    // 멀리 건너뛸수록 더 엄격하게
       if (i < cur) need += 0.10;        // 위로 올라가는 것도 더 엄격하게
       if (n.length < 8) need += 0.2;    // 말이 짧을수록 더 엄격하게
+      if (isFar) need = Math.max(th + 0.15, 0.80);   // 4문장 이상 앞은 아주 엄격하게
       if (score < need) continue;
+      if (isFar){
+        if (n.length < 14) continue;
+        if (i === blockIdx && Date.now() < blockUntil) continue;
+        if (score > farScore){ far = i; farScore = score; }
+        continue;
+      }
       // 지금 문장이 충분히 맞으면, 다른 문장은 확실히 더 높을 때만 옮김
       if (i !== cur && curScore >= th && score < curScore + (i < cur ? 0.20 : 0.10)) continue;
-      if (score > bestScore + 0.02 || (Math.abs(score - bestScore) <= 0.02 && best >= 0 && Math.abs(i - cur) < Math.abs(best - cur))){
-        best = i; bestScore = score;
+      if (score > nearScore + 0.02 || (Math.abs(score - nearScore) <= 0.02 && near >= 0 && Math.abs(i - cur) < Math.abs(near - cur))){
+        near = i; nearScore = score;
       }
+    }
+    // 먼 문장은 다른 문장과 점수 차이가 25% 이상 나야 후보
+    if (far >= 0){
+      var other = 0;
+      for (var key in scores){ if (parseInt(key, 10) !== far && scores[key] > other) other = scores[key]; }
+      if (farScore - other < 0.25) far = -1;
     }
 
     var shown = full.length > 30 ? '…' + text.replace(/\s+/g, ' ').slice(-30) : text;
-    var note = '';
+    var note = '', best = -1, bigMove = false;
+    if (far >= 0 && (near < 0 || farScore >= nearScore + 0.10)){
+      if (far === farIdx) farCount++; else { farIdx = far; farCount = 1; }
+      if (farCount < 3){ setStatus('🎤 듣는 중: ' + shown + '  (먼 문장 확인 중)'); return; }
+      best = far; bigMove = true; farIdx = -1; farCount = 0;
+    } else {
+      farIdx = -1; farCount = 0;
+      best = near;
+    }
+
     if (best < 0){
       missCount++;
-      var jump = (missCount >= 4 && n.length >= 10) ? findGlobal(tail, total) : -1;
+      var jump = (missCount >= 4 && n.length >= 14) ? findGlobal(tail, W) : -1;
       if (jump < 0){
         setStatus('🎤 듣는 중: ' + shown + '  (대본과 맞지 않아 무시)');
         return;
       }
-      best = jump;
-      note = '  (' + (jump + 1) + '번째 문장으로 이동)';
+      best = jump; bigMove = true;
     } else {
       missCount = 0; recIdx = -1; recCount = 0;
     }
+    if (bigMove) note = '  ⚠ ' + (best + 1) + '번째 문장으로 이동';
+
     // 위쪽 문장으로 되돌아가는 것은 같은 문장이 연속 2번 나올 때만
-    if (best >= 0 && best < cur && note === ''){
+    if (best >= 0 && best < cur && !bigMove){
       if (best === backIdx) backCount++; else { backIdx = best; backCount = 1; }
       if (backCount < 2){ setStatus('🎤 듣는 중: ' + shown); return; }
     }
     backIdx = -1; backCount = 0;
     if (best !== cur){
+      var before = cur;
       setCur(best);
+      if (bigMove) showUndo(before, best);
       scrollToCur();
     }
 
-    // 현재 문장을 얼마나 읽었는지 추정
-    var ns = norms[cur], pos = -1;
-    for (var k2 = tb.length - 1; k2 >= 0; k2--){
-      if (sets[cur].has(tb[k2])){ pos = ns.lastIndexOf(tb[k2]); break; }
-    }
-    var progress = pos >= 0 ? (pos + 2) / ns.length : 0;
-    if (progress >= advancePoint() && cur + 1 < sentences.length){
-      var prev = cur;
-      setCur(cur + 1);
-      holdIdx = prev;
-      holdUntil = Date.now() + 2500;
-      scrollToCur();
+    // 현재 문장을 충분히 읽었으면 다음 문장으로 (연속 2번 확인, 0.8초 간격)
+    // 단, 말한 글자가 다른 문장과도 똑같이 맞는 경우(끝말이 같은 문장들 등)에는 넘기지 않음
+    var otherMax = 0;
+    for (var key2 in scores){ if (parseInt(key2, 10) !== cur && scores[key2] > otherMax) otherMax = scores[key2]; }
+    if (readProgress(tail, cur) >= advancePoint() && cur + 1 < sentences.length && curScore - otherMax >= 0.10){
+      advCount++;
+      if (advCount >= 2 && Date.now() - lastAdvance > 800){
+        var prev = cur;
+        setCur(cur + 1);
+        holdIdx = prev;
+        holdUntil = Date.now() + 12000;
+        holdFin = 0;
+        lastAdvance = Date.now();
+        scrollToCur();
+      }
+    } else {
+      advCount = 0;
     }
     setStatus('🎤 듣는 중: ' + shown + note);
   }
@@ -691,7 +793,8 @@
     if (!d) return;
     setCur(parseInt(d.dataset.i, 10));
     baseLen = lastNormLen;          // 클릭 전에 하신 말은 비교에서 제외
-    missCount = 0; recIdx = -1; recCount = 0;
+    missCount = 0; recIdx = -1; recCount = 0; farIdx = -1; farCount = 0;
+    hideUndo();
     lastUserScroll = 0;
     scrollToCur();
     setStatus('시작 위치: ' + (cur + 1) + '번째 문장');
