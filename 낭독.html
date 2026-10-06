@@ -67,7 +67,7 @@
 </head>
 <body>
 
-<h1>🎤 낭독 <span class="ver" id="ver">v1006-1</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
+<h1>🎤 낭독 <span class="ver" id="ver">v1006-2</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
 
 <div id="reader">
   <div id="bar">
@@ -107,7 +107,7 @@
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
   var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
-  var APP_VERSION = 'v1006-1';
+  var APP_VERSION = 'v1006-2';
   var logRows = [], decision = '', lastCurScore = 0, lastLocked = false;   // 인식 기록(흔들림 분석용)
   var lastHeard = 0, wakeLock = null, silenceTimer = null, saveTimer = null, editStartText = '';
   var lockUntil = 0, advTimer = null;             // 지금 문장에 '올인'하는 시간 / 넘김 대기 타이머
@@ -868,6 +868,25 @@
       editStartText = $('script-input').value;
       setMode(true);
     }
+  });
+
+  // 📂 불러오기: 파일을 골라 대본 창으로 불러옴 (txt, docx, hwp, hwpx, pdf)
+  $('btn-file').addEventListener('click', function(){ $('file-input').click(); });
+  $('file-input').addEventListener('change', function(e){
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    setStatus('「' + f.name + '」 읽는 중…');
+    readFileText(f).then(function(text){
+      if (wantListen) stopMic();
+      $('script-input').value = text;
+      setMode(true);
+      lsSet('script', text);
+      logNote('파일 불러옴: ' + f.name);
+      setStatus('「' + f.name + '」 파일을 불러왔습니다. 내용을 확인하고 ✔ 완료를 누르세요.');
+    }).catch(function(err){
+      setStatus('파일을 불러오지 못했습니다: ' + (err && err.message ? err.message : '알 수 없는 오류'));
+    });
   });
   $('btn-mic').addEventListener('click', function(){ wantListen ? stopMic() : startMic(); });
 
