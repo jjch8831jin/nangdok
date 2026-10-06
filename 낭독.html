@@ -48,9 +48,10 @@
   #bar button{padding:0 7px;white-space:nowrap}
   #bar button.b-size{padding:0 6px}
   #bar input[type=range]{width:50px;margin:0}
-  #text{overflow-y:auto;flex:1;min-height:0;padding:14px 18px;border:1px solid var(--bd);border-top:none;font-size:14pt;line-height:1.5;scroll-behavior:auto}
-  .s{padding:0 8px;margin:0;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all}
-  .s.cur{background:var(--hl)}
+  #text{overflow-y:auto;flex:1;min-height:0;padding:14px 15%;border:1px solid var(--bd);border-top:none;font-size:14pt;line-height:1.5;scroll-behavior:auto}
+  .s{padding:.2em 8px;margin:0 0 1em;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all;opacity:.5;transition:opacity .15s}
+  .s:hover{opacity:.8}
+  .s.cur{background:var(--hl);opacity:1}
   #btn-top{display:none;position:absolute;right:26px;bottom:60px;z-index:5;background:#2a5bbf;border-radius:999px;padding:2px 16px;box-shadow:0 2px 8px rgba(0,0,0,.35);font-size:18pt}
   #status{padding:6px 10px;border:1px solid var(--bd);border-top:none;border-radius:0 0 10px 10px;color:var(--mut);background:var(--card);min-height:2em}
   #reader:fullscreen{height:100vh;padding:0}
