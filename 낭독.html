@@ -67,7 +67,7 @@
 </head>
 <body>
 
-<h1>🎤 낭독 <span class="ver" id="ver">v1006-4</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
+<h1>🎤 낭독 <span class="ver" id="ver">v1006-5</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
 
 <div id="reader">
   <div id="bar">
@@ -80,7 +80,7 @@
     <button id="btn-bigger" class="b-size">A+</button>
     <span id="size-label">24pt</span>
     <label title="겹침: 가운데가 기본(0). 왼쪽으로 옮기면 느리고 엄격하게, 오른쪽으로 옮기면 빠르고 쉽게 문장을 따라갑니다"><span>겹침</span> <input type="range" id="th" min="-10" max="10" step="1" value="0" autocomplete="off"><span id="th-label">0</span></label>
-    <label class="l-adv" title="넘김: 가운데가 기본(0). 왼쪽으로 옮기면 문장을 더 읽은 뒤 느리게, 오른쪽으로 옮기면 일찍 빠르게 다음 문장으로 넘어갑니다"><span>넘김</span> <input type="range" id="adv" min="-10" max="10" step="1" value="0" autocomplete="off"><span id="adv-label">0</span></label>
+    <label class="l-adv" title="넘김: 가운데(0)는 문장을 다 읽은 직후. 오른쪽은 문장이 끝나기 전에 미리(한 칸 0.25초), 왼쪽은 끝난 뒤 늦게(한 칸 0.15초) 다음 문장으로 넘어갑니다"><span>넘김</span> <input type="range" id="adv" min="-10" max="10" step="1" value="0" autocomplete="off"><span id="adv-label">0</span></label>
     <span class="sp"></span>
     <span id="counter">0 / 0</span>
   </div>
@@ -107,9 +107,10 @@
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
   var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
-  var APP_VERSION = 'v1006-4';
+  var APP_VERSION = 'v1006-5';
   var logRows = [], decision = '', lastCurScore = 0, lastLocked = false;   // 인식 기록(흔들림 분석용)
   var lastHeard = 0, wakeLock = null, silenceTimer = null, saveTimer = null, editStartText = '';
+  var progIdx = -1, progP0 = 0, progT0 = 0;       // 읽는 속도를 재기 위한 기록
   var lockUntil = 0, advTimer = null;             // 지금 문장에 '올인'하는 시간 / 넘김 대기 타이머
   var farIdx = -1, farCount = 0;                  // 먼 문장으로 옮길 때 연속 확인용
   var advCount = 0, lastAdvance = 0;              // 다음 문장으로 넘길 때 연속 확인용
@@ -151,9 +152,12 @@
     var s = parseInt($('th').value, 10);
     return (s >= 0 ? 50 - s * 2 : 50 - s * 4) / 100;
   }
-  function advancePoint(){     // 넘김 시점: 0 = 문장 끝(97%)까지 읽은 뒤, 오른쪽 끝(+10)은 70%에서 일찍
+  function advancePoint(){     // 넘김 기본 시점: 문장 끝(97%)까지 읽은 뒤
+    return 0.97;
+  }
+  function advanceLead(){      // 오른쪽(+)일수록 문장이 끝나기 '몇 초 전'에 미리 넘김 (한 칸 0.25초, 최대 2.5초)
     var s = parseInt($('adv').value, 10);
-    return s > 0 ? 0.97 - s * 0.027 : 0.97;
+    return s > 0 ? s * 0.25 : 0;
   }
   function advanceDelay(){     // 왼쪽(-)일수록 문장을 다 읽은 뒤 조금 더 기다렸다가 넘김 (최대 1.5초)
     var s = parseInt($('adv').value, 10);
@@ -478,7 +482,7 @@
     cur = i;
     holdIdx = -1; holdUntil = 0; holdFin = 0;
     advCount = 0;
-    lockUntil = 0;
+    lockUntil = 0; progIdx = -1;
     clearTimeout(advTimer); advTimer = null;
     if (els[cur]) els[cur].classList.add('cur');
     updateCounter();
@@ -746,7 +750,14 @@
     var otherMax = 0;
     for (var key2 in scores){ if (parseInt(key2, 10) !== cur && scores[key2] > otherMax) otherMax = scores[key2]; }
     var progress = readProgress(tail, cur);
-    if (progress >= advancePoint() && cur + 1 < sentences.length && curScore - otherMax >= 0.10){
+    // 읽는 속도 추정: 이 문장을 읽기 시작한 뒤 읽은 비율이 시간에 따라 늘어난 정도로, 끝까지 남은 시간을 계산
+    if (progress > 0 && progIdx !== cur){ progIdx = cur; progP0 = progress; progT0 = nowT; }
+    var lead = advanceLead(), early = false;
+    if (lead > 0 && progIdx === cur && progress >= 0.5 && nowT - progT0 >= 1500 && progress - progP0 >= 0.25){
+      var speed = (progress - progP0) / ((nowT - progT0) / 1000);      // 1초에 읽는 문장 비율
+      if ((1 - progress) / speed <= lead) early = true;                 // 남은 시간이 미리 넘길 시간 이하
+    }
+    if ((progress >= advancePoint() || early) && cur + 1 < sentences.length && curScore - otherMax >= 0.10){
       advCount++;
       if ((advCount >= 2 || progress >= 0.97) && Date.now() - lastAdvance > 800){
         var delay = advanceDelay(), fin = progress >= 0.95;
