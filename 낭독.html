@@ -40,7 +40,7 @@
     #bar label.l-adv{background:#1f5a3b;color:#d3f5e2}
     #counter{background:#1f3b66;color:#cfe0ff}
   }
-  #reader{display:flex;flex-direction:column;flex:1;min-height:0;background:var(--bg)}
+  #reader{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;background:var(--bg)}
   #bar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:5px 6px;line-height:1.5;background:var(--card);border:1px solid var(--bd);border-radius:10px 10px 0 0}
   #bar .sp{flex:1}
   #bar label{display:flex;align-items:center;gap:4px}
@@ -51,6 +51,7 @@
   #text{overflow-y:auto;flex:1;min-height:0;padding:14px 18px;border:1px solid var(--bd);border-top:none;font-size:14pt;line-height:1.9;scroll-behavior:auto}
   .s{padding:4px 8px;margin:2px 0;border-radius:8px;cursor:pointer;white-space:pre-wrap;word-break:keep-all}
   .s.cur{background:var(--hl)}
+  #btn-top{display:none;position:absolute;right:26px;bottom:60px;z-index:5;background:#2a5bbf;border-radius:999px;padding:2px 16px;box-shadow:0 2px 8px rgba(0,0,0,.35);font-size:18pt}
   #status{padding:6px 10px;border:1px solid var(--bd);border-top:none;border-radius:0 0 10px 10px;color:var(--mut);background:var(--card);min-height:2em}
   #reader:fullscreen{height:100vh;padding:0}
   #reader:fullscreen #text, #reader:fullscreen #script-input{flex:1;height:auto}
@@ -79,6 +80,7 @@
   </div>
   <textarea id="script-input" placeholder="여기에 대본을 붙여넣고 ✔ 완료를 누르세요. 줄바꿈과 마침표(. ? !) 기준으로 문장을 나눕니다."></textarea>
   <div id="text" style="display:none"></div>
+  <button id="btn-top" title="대본 맨 위로 이동합니다">⬆ 위로</button>
   <div id="status"></div>
 </div>
 
@@ -408,6 +410,7 @@
     $('btn-edit').textContent = edit ? '✔ 완료' : '✏️ 편집';
     if (edit) $('script-input').focus();
     else scrollToCur();
+    updateTopBtn();
   }
 
   function updateCounter(){ $('counter').textContent = (sentences.length ? cur + 1 : 0) + ' / ' + sentences.length; }
@@ -421,6 +424,15 @@
   }
 
   /* ---------- 스크롤 ---------- */
+  function topBox(){ return editing ? $('script-input') : $('text'); }
+  function updateTopBtn(){ $('btn-top').style.display = topBox().scrollTop > 80 ? 'block' : 'none'; }
+  $('text').addEventListener('scroll', updateTopBtn);
+  $('script-input').addEventListener('scroll', updateTopBtn);
+  $('btn-top').addEventListener('click', function(){
+    lastUserScroll = Date.now();
+    topBox().scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
   function userScrolling(){ return Date.now() - lastUserScroll < 1500; }
 
   function scrollToCur(){
