@@ -67,7 +67,7 @@
 </head>
 <body>
 
-<h1>🎤 낭독 <span class="ver" id="ver">v1006-5</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
+<h1>🎤 낭독 <span class="ver" id="ver">v1007-1</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
 
 <div id="reader">
   <div id="bar">
@@ -98,6 +98,7 @@
 
   var sentences = [];   // 원문 문장
   var norms = [];       // 비교용(띄어쓰기·부호 제거) 문장
+  var normsF = [];      // 위 문장에서 '소리가 비슷한 글자'를 같은 글자로 바꾼 것
   var sets = [];        // 문장별 2글자 묶음 집합
   var els = [];         // 문장 DOM
   var cur = 0;
@@ -107,7 +108,7 @@
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
   var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
-  var APP_VERSION = 'v1006-5';
+  var APP_VERSION = 'v1007-1';
   var logRows = [], decision = '', lastCurScore = 0, lastLocked = false;   // 인식 기록(흔들림 분석용)
   var lastHeard = 0, wakeLock = null, silenceTimer = null, saveTimer = null, editStartText = '';
   var progIdx = -1, progP0 = 0, progT0 = 0;       // 읽는 속도를 재기 위한 기록
@@ -132,6 +133,28 @@
             .replace(/[(（][^)）]*[\u4e00-\u9fff\u3400-\u4dbf][^)）]*[)）]/g, '');                 // 수기(水氣) → 수기
   }
   function matchNorm(s){ var m = norm(stripNotes(s)); return m.length ? m : norm(s); }
+
+  // 소리가 비슷한 글자를 같은 글자로 바꿈 (글자 수는 그대로라서 위치 계산은 달라지지 않음)
+  //  첫소리: ㄱ·ㅋ·ㄲ / ㄷ·ㅌ·ㄸ / ㅂ·ㅍ·ㅃ / ㅅ·ㅆ·ㅈ·ㅉ·ㅊ / ㄴ·ㅇ 을 각각 같게
+  //  가운데소리: ㅐ·ㅔ·ㅒ·ㅖ / ㅙ·ㅚ·ㅞ 를 각각 같게
+  //  받침: 실제 소리 나는 대로 정리(ㅅ·ㅈ·ㅊ·ㅌ·ㅎ → ㄷ 소리 등), ㄴ·ㅁ·ㅇ 은 같게. 받침이 있고 없고는 다르게 봄
+  var F_CHO  = [0,0,11,3,3,5,6,7,7,12,12,11,12,12,12,0,3,7,18];
+  var F_JUNG = [0,5,2,5,4,5,6,5,8,9,15,15,12,13,14,15,16,17,18,19,20];
+  var F_JONG = [0,1,1,1,21,21,21,7,8,1,21,8,8,8,17,8,21,17,17,7,7,21,7,7,1,7,17,7];
+  var SIMILAR_W = 0.8;   // 소리만 비슷하게 맞은 부분은 정확히 맞은 것의 80%로 침
+  function fold(s){
+    var o = '';
+    for (var i = 0; i < s.length; i++){
+      var c = s.charCodeAt(i);
+      if (c >= 0xAC00 && c <= 0xD7A3){
+        var x = c - 0xAC00;
+        o += String.fromCharCode(0xAC00 + F_CHO[(x / 588) | 0] * 588 + F_JUNG[((x % 588) / 28) | 0] * 28 + F_JONG[x % 28]);
+      } else {
+        o += s.charAt(i);
+      }
+    }
+    return o;
+  }
 
   // 이 컴퓨터(브라우저)에만 저장: 대본, 읽던 위치, 글자 크기
   function lsGet(k){ try { return localStorage.getItem('nangdok:' + k); } catch (e) { return null; } }
@@ -442,6 +465,7 @@
     var text = $('script-input').value;
     sentences = splitScript(text);
     norms = sentences.map(matchNorm);
+    normsF = norms.map(fold);
     sets = norms.map(function(n){ return new Set(bigrams(n)); });
     df = {};
     sets.forEach(function(st){ st.forEach(function(bg){ df[bg] = (df[bg] || 0) + 1; }); });
@@ -536,14 +560,14 @@
       var w = (k + 1) * rarity(tb[k]);   // 최근에 말한 부분일수록 가중치↑
       wts.push(w); total += w;
     }
-    return { wts: wts, total: total };
+    return { wts: wts, total: total, tf: fold(tail) };   // tf: 소리 비슷한 글자를 같게 바꾼 말(글자 수 같음)
   }
 
   // 말한 글자(tail)가 문장에 '이어서, 순서대로' 들어 있는 만큼 점수를 냄
   // (짧게 떨어진 일치는 점수를 깎아서 '고목나무' 같은 반복 표현만으로는 점수가 같아지지 않게 함)
   // excl이 있으면, 그 문장(지금 문장)에도 들어 있는 말은 빼고 '이 문장에만 있는 말'로 점수를 냄
-  function scoreSentence(i, tail, W, excl){
-    var ns = norms[i], L = tail.length, k = 0, covered = 0;
+  function scoreCore(ns, tail, W, exNs){
+    var L = tail.length, k = 0, covered = 0;
     while (k < L - 1){
       var m = 2;
       while (k + m <= L && ns.indexOf(tail.slice(k, k + m)) >= 0) m++;
@@ -551,7 +575,7 @@
       if (r >= 1){
         var w = 0;
         for (var t = k; t < k + r; t++) w += W.wts[t];
-        var shared = (excl !== undefined && excl >= 0 && excl !== i && norms[excl].indexOf(tail.slice(k, k + r + 1)) >= 0);
+        var shared = (exNs !== null && exNs.indexOf(tail.slice(k, k + r + 1)) >= 0);
         if (!shared) covered += w * (r >= 3 ? 1 : (r === 2 ? 0.5 : 0));
         k += r;
       } else {
@@ -560,16 +584,27 @@
     }
     return covered / W.total;
   }
+  // 정확히 맞은 점수(a)에, 소리가 비슷해서 더 맞게 된 만큼(b - a)을 80%만 더함
+  function scoreSentence(i, tail, W, excl){
+    var hasEx = (excl !== undefined && excl >= 0 && excl !== i);
+    var a = scoreCore(norms[i], tail, W, hasEx ? norms[excl] : null);
+    var b = scoreCore(normsF[i], W.tf, W, hasEx ? normsF[excl] : null);
+    return b > a ? a + (b - a) * SIMILAR_W : a;
+  }
 
   // 지금 문장을 얼마나 읽었는지: 말 끝부분이 문장 안에 '이어서' 들어 있는 위치로 계산
-  function readProgress(tail, idx){
-    if (idx < 0 || !norms[idx]) return 0;
-    var ns = norms[idx];
+  function progressCore(ns, tail){
     for (var len = Math.min(tail.length, 12); len >= 4; len--){
       var p = ns.indexOf(tail.slice(tail.length - len));
       if (p >= 0) return (p + len) / ns.length;
     }
     return 0;
+  }
+  function readProgress(tail, idx){
+    if (idx < 0 || !norms[idx]) return 0;
+    var p = progressCore(norms[idx], tail);
+    if (p >= 1) return p;
+    return Math.max(p, progressCore(normsF[idx], fold(tail)));   // 끝말을 소리만 비슷하게 알아들어도 읽은 것으로 침
   }
 
   // 앞뒤 범위에서 못 찾는 상태가 이어질 때, 대본 전체에서 찾음 (아주 확실할 때만)
@@ -632,11 +667,11 @@
     }, ms);
   }
 
-  function handleSpeech(text){
+  function handleSpeech(text, altN){
     var before = cur;
     decision = '';
     handleSpeechCore(text);
-    pushLog({ t: Date.now(), tail: text.replace(/\s+/g, ' ').slice(-28), from: before, to: cur, dec: decision || (lastLocked ? '유지(올인)' : '유지'), cs: lastCurScore });
+    pushLog({ t: Date.now(), tail: text.replace(/\s+/g, ' ').slice(-28), from: before, to: cur, dec: decision || (lastLocked ? '유지(올인)' : '유지'), cs: lastCurScore, alt: altN || 0 });
   }
 
   function handleSpeechCore(text){
@@ -770,20 +805,53 @@
   }
 
   /* ---------- 음성 인식 ---------- */
+  // 마이크가 알려 주는 '다른 후보'들 중, 지금 읽을 차례(지금 문장부터 앞쪽)의 대본과 가장 잘 맞는 것을 고름
+  var finalPick = [];   // 끝난 결과마다 한 번 고른 후보 번호 (다시 바꾸지 않음: 글자 위치가 흔들리지 않게)
+  function altScore(text){
+    if (!sentences.length) return 0;
+    var n = norm(text);
+    if (n.length < 4) return 0;
+    var hi = Math.min(sentences.length - 1, cur + AHEAD), sum = 0, cnt = 0;
+    for (var end = n.length; cnt === 0 || end >= 8; end -= TAIL >> 1){   // 긴 말은 뒤에서부터 겹치게 나눠서 봄
+      var tail = n.slice(Math.max(0, end - TAIL), end), W = weightsFor(tail), b = 0;
+      if (W){
+        for (var i = cur; i <= hi; i++){ var s = scoreSentence(i, tail, W); if (s > b) b = s; }
+      }
+      sum += b; cnt++;
+    }
+    return sum / cnt;
+  }
+  function bestAlt(res){
+    var best = 0, bestS = altScore(res[0].transcript);
+    for (var k = 1; k < res.length; k++){
+      var s = altScore(res[k].transcript);
+      if (s > bestS + 0.04){ best = k; bestS = s; }   // 확실히 더 잘 맞을 때만 바꿈
+    }
+    return best;
+  }
+
   function createRec(){
     rec = new SR();
     rec.lang = 'ko-KR';
     rec.continuous = true;
     rec.interimResults = true;
-    rec.maxAlternatives = 1;
+    rec.maxAlternatives = 3;
 
-    rec.onstart = function(){ baseLen = 0; lastNormLen = 0; lastEventTime = 0; lastHeard = Date.now(); setStatus('🎤 듣는 중: (말씀해 주세요)'); };
+    rec.onstart = function(){ baseLen = 0; lastNormLen = 0; lastEventTime = 0; finalPick = []; lastHeard = Date.now(); setStatus('🎤 듣는 중: (말씀해 주세요)'); };
 
     rec.onresult = function(e){
       lastHeard = Date.now();
-      var t = '';
-      for (var i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
-      handleSpeech(t);
+      var t = '', usedAlt = 0;
+      for (var i = 0; i < e.results.length; i++){
+        var res = e.results[i], k = 0;
+        if (res.length > 1){
+          if (res.isFinal && finalPick[i] !== undefined) k = finalPick[i];
+          else { k = bestAlt(res); if (res.isFinal) finalPick[i] = k; }
+          if (k > 0) usedAlt++;
+        }
+        t += res[k].transcript;
+      }
+      handleSpeech(t, usedAlt);
     };
 
     rec.onerror = function(e){
@@ -1013,7 +1081,7 @@
     logRows.forEach(function(r){
       if (r.note){ L.push(fmtTime(r.t) + ' ※ ' + r.note); return; }
       var pos = '[' + (r.from + 1) + (r.from !== r.to ? '→' + (r.to + 1) : '') + ']';
-      L.push(fmtTime(r.t) + ' ' + pos + ' ' + r.dec + ' | ' + r.cs.toFixed(2) + ' | ' + r.tail);
+      L.push(fmtTime(r.t) + ' ' + pos + ' ' + r.dec + (r.alt ? ' (다른 후보 ' + r.alt + '곳)' : '') + ' | ' + r.cs.toFixed(2) + ' | ' + r.tail);
     });
     return L.join('\n');
   }
