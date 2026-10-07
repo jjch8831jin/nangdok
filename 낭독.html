@@ -67,7 +67,7 @@
 </head>
 <body>
 
-<h1>🎤 낭독 <span class="ver" id="ver">v1007-1</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
+<h1>🎤 낭독 <span class="ver" id="ver">v1007-2</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
 
 <div id="reader">
   <div id="bar">
@@ -108,7 +108,7 @@
   var missCount = 0, recIdx = -1, recCount = 0;   // 건너뛰기 자동 감지용
   var backIdx = -1, backCount = 0;                // 문장을 옮길 때 연속 확인용
   var lastEventTime = 0;                          // 마지막으로 소리를 인식한 시각(쉬었다 읽는 것을 알아채기 위함)
-  var APP_VERSION = 'v1007-1';
+  var APP_VERSION = 'v1007-2';
   var logRows = [], decision = '', lastCurScore = 0, lastLocked = false;   // 인식 기록(흔들림 분석용)
   var lastHeard = 0, wakeLock = null, silenceTimer = null, saveTimer = null, editStartText = '';
   var progIdx = -1, progP0 = 0, progT0 = 0;       // 읽는 속도를 재기 위한 기록
@@ -674,6 +674,20 @@
     pushLog({ t: Date.now(), tail: text.replace(/\s+/g, ' ').slice(-28), from: before, to: cur, dec: decision || (lastLocked ? '유지(올인)' : '유지'), cs: lastCurScore, alt: altN || 0 });
   }
 
+  // 다음 문장의 첫머리(앞 4글자)를 방금 말했는지 찾음. 찾으면 그 위치(n 안의 번호)를, 없으면 -1
+  // 지금 문장에도 있는 말(반복 표현)이면 시작으로 보지 않음
+  function nextStartPos(n){
+    if (cur + 1 >= sentences.length) return -1;
+    var nx = norms[cur + 1];
+    if (nx.length < 4) return -1;
+    var head = nx.slice(0, 4), headF = normsF[cur + 1].slice(0, 4);
+    if (norms[cur].indexOf(head) >= 0 || normsF[cur].indexOf(headF) >= 0) return -1;
+    var off = Math.max(0, n.length - TAIL), seg = n.slice(off);
+    var p = seg.lastIndexOf(head);
+    if (p < 0) p = fold(seg).lastIndexOf(headF);
+    return p < 0 ? -1 : off + p;
+  }
+
   function handleSpeechCore(text){
     if (!sentences.length) return;
     var full = norm(text);
@@ -686,6 +700,15 @@
     var tail = n.slice(-TAIL);
     var W = weightsFor(tail);
     if (!W) return;
+
+    // 다음 문장의 첫머리를 말하기 시작했으면, 지금 문장의 끝이 좀 틀렸어도 바로 다음 문장으로 넘김
+    var startAt = nextStartPos(n);
+    if (startAt >= 0 && nowT - lastAdvance > 800){
+      decision = '다음 문장 시작을 들음 → 넘김';
+      doAdvance(true, baseLen + startAt);      // 그 앞(지금 문장 끝의 틀린 말)은 비교에서 빼고, 다음 문장 첫머리는 남김
+      setStatus('🎤 듣는 중: ' + (full.length > 30 ? '…' + text.replace(/\s+/g, ' ').slice(-30) : text) + '  (다음 문장 시작)');
+      return;
+    }
 
     var th = threshold();
     var from = cur, to = Math.min(sentences.length - 1, cur + AHEAD);   // 앞으로만 따라감
