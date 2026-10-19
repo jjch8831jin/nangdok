@@ -448,7 +448,8 @@
     text.split(/\r?\n/).forEach(function(line){
       line = line.trim();
       if (!line) return;
-      var parts = line.split(/(?<=[.!?。…])\s+/).map(function(s){ return s.trim(); }).filter(function(s){ return s; });
+      // 마침표 뒤에 닫는 따옴표(” ’ " ' 」 』)가 붙어도 문장을 나눔. 단, 바로 뒤가 '라고·라며·라는·하고…' 처럼 인용을 잇는 말이면 나누지 않음
+      var parts = line.split(/(?<=[.!?。…][”’"'」』]*)\s+(?!(?:이?라고|이?라며|이?라는|이?라|하고|하며|하는|하면서)(?![가-힣]))/).map(function(s){ return s.trim(); }).filter(function(s){ return s; });
       for (var i = 0; i < parts.length; i++){
         // 줄 맨 앞의 번호(1. ② 가. 등)는 뒤따르는 글과 한 문장으로 묶음
         if (/^(?:\(?\d{1,3}[.)]|[①-⑳]|[가-하]\.|[A-Za-z]\.|[ⅰ-ⅹⅠ-Ⅹ]+\.)$/.test(parts[i]) && i + 1 < parts.length){
