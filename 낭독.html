@@ -72,8 +72,6 @@
 </head>
 <body>
 
-<h1>🎤 낭독 <span class="ver" id="ver">v1007-2</span> <button id="btn-log" class="b-log" title="최근 인식 기록을 복사합니다. 흔들릴 때 붙여넣어 보내 주세요">📋 기록 복사</button></h1>
-
 <div id="reader">
   <div id="bar">
     <button id="btn-file" class="b-file" title="txt, 워드(docx), 한글(hwp, hwpx), PDF 파일을 대본 창으로 불러옵니다">📂 불러오기</button>
@@ -1114,7 +1112,7 @@
     });
     return L.join('\n');
   }
-  $('btn-log').addEventListener('click', function(){
+  if ($('btn-log')) $('btn-log').addEventListener('click', function(){
     var text = buildLogText(), n = logRows.length;
     function done(){ setStatus('📋 기록 ' + n + '줄을 복사했습니다. 붙여넣어 보내 주세요.'); }
     function fallback(){
